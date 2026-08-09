@@ -52,10 +52,6 @@ from vllm.model_executor.offloader import (
     set_offloader,
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
-from vllm.multimodal.encoder_budget import (
-    MultiModalBudget,
-    get_dummy_encoder_profile_inputs,
-)
 from vllm.sequence import IntermediateTensors
 from vllm.tasks import SupportedTask
 from vllm.utils.extensible_tensor import ExtensibleKVCacheBuffers
@@ -207,8 +203,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         self.cp_interleave = self.parallel_config.cp_kv_cache_interleave_size
 
         # Multimodal
-        self.mm_registry = MULTIMODAL_REGISTRY
-        self.supports_mm_inputs = self.mm_registry.supports_multimodal_inputs(
+        self.supports_mm_inputs = MULTIMODAL_REGISTRY.supports_multimodal_inputs(
             self.model_config
         )
         self.encoder_cache = None
@@ -769,44 +764,34 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         assert self.pooling_runner is not None
         self.pooling_runner.dummy_pooler_run(hidden_states)
 
-    @torch.inference_mode()
-    def profile_run(self) -> None:
+    def warmup_multimodal_encoder(self) -> None:
+        """Re-run the worst-case encoder pass so its memory stays resident
+        for post-warmup measurement."""
         if self.supports_mm_inputs and self.is_first_pp_rank:
-            mm_config = self.model_config.multimodal_config
-            if mm_config is not None and not mm_config.skip_mm_profiling:
-                mm_budget = MultiModalBudget(
-                    self.vllm_config,
-                    self.mm_registry,
-                    enable_cache=False,
-                )
-                dummy_mm_inputs = get_dummy_encoder_profile_inputs(
-                    self.mm_registry,
-                    mm_budget,
-                )
-                self.model_state.encoder_runner.profile_encoder_cache(
-                    dummy_mm_inputs, mm_budget
-                )
-
-        if self.is_encoder_only:
+            self.model_state.profile_encoder_cache()
             torch.accelerator.synchronize()
             self.reset_encoder_cache()
-            gc.collect()
-            return
 
-        hidden_states, sample_hidden_states = self._dummy_run(
-            self.max_num_tokens, skip_attn=True, is_profile=True
-        )
+    def profile_run(self) -> None:
+        if self.supports_mm_inputs and self.is_first_pp_rank:
+            self.model_state.profile_encoder_cache()
 
-        # Only run sampler/pooler on last PP rank (non-last ranks return None).
-        if self.is_last_pp_rank:
-            assert sample_hidden_states is not None
-            if self.pooling_runner is None:
-                self._dummy_sampler_run(sample_hidden_states)
-            else:
-                self._dummy_pooler_run(hidden_states)
+        if not self.is_encoder_only:
+            hidden_states, sample_hidden_states = self._dummy_run(
+                self.max_num_tokens, skip_attn=True, is_profile=True
+            )
+
+            # Only run sampler/pooler on last PP rank (non-last ranks return None).
+            if self.is_last_pp_rank:
+                assert sample_hidden_states is not None
+                if self.pooling_runner is None:
+                    self._dummy_sampler_run(sample_hidden_states)
+                else:
+                    self._dummy_pooler_run(hidden_states)
+
+            del hidden_states, sample_hidden_states
 
         torch.accelerator.synchronize()
-        del hidden_states, sample_hidden_states
         self.reset_encoder_cache()
         gc.collect()
 

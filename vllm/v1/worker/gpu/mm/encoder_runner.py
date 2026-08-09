@@ -1,11 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+
 import numpy as np
 import torch
 
 from vllm.logger import init_logger
 from vllm.model_executor.models.interfaces import SupportsMultiModal, supports_realtime
-from vllm.multimodal.encoder_budget import MultiModalBudget
+from vllm.multimodal.encoder_budget import (
+    MultiModalBudget,
+)
 from vllm.multimodal.inputs import MultiModalKwargsItem
 from vllm.multimodal.utils import (
     get_mm_features_in_window,

@@ -8,6 +8,11 @@ import torch.nn as nn
 
 from vllm.config import VllmConfig
 from vllm.config.compilation import CUDAGraphMode
+from vllm.multimodal import MULTIMODAL_REGISTRY
+from vllm.multimodal.encoder_budget import (
+    MultiModalBudget,
+    get_dummy_encoder_profile_inputs,
+)
 from vllm.tasks import GenerationTask
 from vllm.v1.attention.backend import AttentionCGSupport
 from vllm.v1.core.sched.output import NewRequestData
@@ -137,6 +142,21 @@ class ModelState(ABC):
     def dummy_inputs_embeds(self, num_tokens: int) -> torch.Tensor | None:
         """Pre-allocated inputs_embeds buffer for dummy runs (contents unused)."""
         return None
+
+    @torch.inference_mode()
+    def profile_encoder_cache(self) -> None:
+        """Profile the encoder and encoder cache at their worst case,
+        holding the memory until the caller resets the encoder cache."""
+        multimodal_config = self.model_config.multimodal_config
+        if not multimodal_config or multimodal_config.skip_mm_profiling:
+            return
+        mm_budget = MultiModalBudget(
+            self.vllm_config, MULTIMODAL_REGISTRY, enable_cache=False
+        )
+        dummy_mm_inputs = get_dummy_encoder_profile_inputs(
+            MULTIMODAL_REGISTRY, mm_budget
+        )
+        self.encoder_runner.profile_encoder_cache(dummy_mm_inputs, mm_budget)
 
     def execute_mm_encoder(
         self, scheduled_encoder_inputs: dict[str, list[int]]

@@ -213,6 +213,10 @@ def warmup_kernels(
     We must call the provided worker's execute_model for pipeline parallel
     coordination.
     """
+    # JIT-compiles the vision tower and keeps its worst-case memory resident
+    # for post-warmup measured KV sizing (profiling's pass is empty_cache'd).
+    model_runner.warmup_multimodal_encoder()
+
     if model_runner.is_encoder_only:
         return
 

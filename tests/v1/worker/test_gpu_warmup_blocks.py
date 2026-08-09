@@ -94,6 +94,7 @@ def _make_runner(
         # No-op without the extensible KV cache; warmup calls it to commit
         # the block prefix it writes to.
         ensure_kv_cache_blocks=lambda num_blocks: None,
+        warmup_multimodal_encoder=lambda: None,
     )
 
 

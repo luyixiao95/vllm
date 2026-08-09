@@ -6388,7 +6388,10 @@ class GPUModelRunner(
             else:
                 raise e
         if self.speculative_config:
-            draft_token_ids = [[0] for _ in range(num_reqs)]
+            # Warm at the full draft width; the rejection sampler's
+            # allocations scale with it.
+            num_spec_tokens = self.speculative_config.num_speculative_tokens
+            draft_token_ids = [[0] * num_spec_tokens for _ in range(num_reqs)]
             dummy_spec_decode_metadata = SpecDecodeMetadata.make_dummy(
                 draft_token_ids, self.device
             )
@@ -6507,9 +6510,11 @@ class GPUModelRunner(
         max_task = max(output_size.items(), key=lambda x: x[1])[0]
         return self._dummy_pooler_run_task(hidden_states, max_task)
 
-    def profile_run(self) -> None:
+    def _run_multimodal_encoder_worst_case(self) -> torch.Tensor | None:
+        """Run the encoder on a max-shape dummy batch, holding the encoder
+        cache's worst-case footprint (returned for the caller to keep alive).
+        """
         dummy_encoder_cache: torch.Tensor | None = None
-        # Profile with multimodal encoder & encoder cache.
         if self.supports_mm_inputs:
             mm_config = self.model_config.multimodal_config
             if mm_config is not None and mm_config.skip_mm_profiling:
@@ -6574,6 +6579,19 @@ class GPUModelRunner(
                         )
                         for i, output in enumerate(dummy_encoder_outputs):
                             self.encoder_cache[f"tmp_{i}"] = output
+        return dummy_encoder_cache
+
+    def warmup_multimodal_encoder(self) -> None:
+        """Re-run the worst-case encoder pass so its memory stays resident
+        for post-warmup measurement (profiling's pass is empty_cache'd)."""
+        dummy_encoder_cache = self._run_multimodal_encoder_worst_case()
+        self._sync_device()
+        del dummy_encoder_cache
+        self.encoder_cache.clear()
+
+    def profile_run(self) -> None:
+        # Profile with multimodal encoder & encoder cache.
+        dummy_encoder_cache = self._run_multimodal_encoder_worst_case()
 
         # Add `is_profile` here to pre-allocate communication buffers
         hidden_states, last_hidden_states = self._dummy_run(

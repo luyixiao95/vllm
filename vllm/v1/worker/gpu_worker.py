@@ -912,6 +912,15 @@ class Worker(WorkerBase):
             else:
                 self.model_runner._dummy_sampler_run(hidden_states=last_hidden_states)
 
+        if (
+            not self.use_v2_model_runner
+            and self.cache_config.enable_extensible_kv_cache
+            and self.model_runner.supports_mm_inputs
+        ):
+            # V1 only (V2 covers this in warmup_kernels): keep the encoder's
+            # worst-case memory resident for the measurement below.
+            self.model_runner.warmup_multimodal_encoder()
+
         warmup_memory_bytes = cuda_graph_memory_bytes
         if self.cache_config.enable_extensible_kv_cache and hasattr(
             self, "available_kv_cache_memory_bytes"
