@@ -151,7 +151,7 @@ def build_offloading_config(
         if isinstance(single_group_spec, FullAttentionSpec):
             if type(single_group_spec) is MLAAttentionSpec:
                 spec_certifiable = (
-                    single_group_spec.compress_ratio == 1
+                    single_group_spec.tokens_per_state == 1
                     and single_group_spec.real_page_size_bytes
                     % single_group_spec.block_size
                     == 0

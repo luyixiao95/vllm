@@ -19,6 +19,7 @@ import torch
 from vllm.config import VllmConfig
 from vllm.distributed.kv_transfer.kv_connector.utils import (
     EngineId,
+    get_current_attn_backend,
 )
 from vllm.distributed.kv_transfer.kv_connector.v1.base import (
     CopyBlocksOp,
@@ -56,6 +57,7 @@ from vllm.distributed.kv_transfer.kv_connector.v1.nixl.stats import (
 from vllm.forward_context import ForwardContext
 from vllm.logger import init_logger
 from vllm.v1.attention.backend import AttentionMetadata
+from vllm.v1.attention.backends.utils import get_flashinfer_layout_string
 from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.outputs import KVConnectorOutput
 
@@ -90,7 +92,7 @@ class NixlBaseConnector(KVConnectorBase_V1, SupportsHMA):
 
         # For now there is no benefit to run cross layers when backend
         # does not support on HND
-        if get_kv_cache_layout() != "HND":
+        if get_flashinfer_layout_string() != "HND":
             return False
 
         extra_config = self.kv_transfer_config.kv_connector_extra_config
