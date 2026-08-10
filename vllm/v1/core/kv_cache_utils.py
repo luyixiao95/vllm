@@ -959,6 +959,8 @@ def _pool_bytes_per_block(kv_cache_groups: list[KVCacheGroupSpec]) -> int:
     `available_memory` into `num_blocks`. Used to compute the effective KV cache
     capacity once `num_gpu_blocks_override` is applied.
     """
+    if _use_packed_kv_cache_arena(kv_cache_groups):
+        return _get_packed_kv_cache_arena(kv_cache_groups)[0]
     buckets = _bucket_layers_by_page_size(kv_cache_groups)
     return sum(ps * len(slots) for ps, slots in buckets.items())
 
@@ -1254,12 +1256,61 @@ def _get_per_layer_spec(
     return spec
 
 
+def _use_packed_kv_cache_arena(kv_cache_groups: list[KVCacheGroupSpec]) -> bool:
+    """Whether to overlay groups' block windows in one packed arena.
+
+    Multi-group models where every group is UniformType (e.g. DeepSeek V4
+    hybrids) pack each group's layers densely into a per-block window and
+    overlay the groups, so a group's window can reuse another group's bytes
+    (a block ID is owned by one group at a time). Per-page-size slot slabs
+    cannot alias across page sizes, so they would over-allocate here.
+    """
+    return len(kv_cache_groups) > 1 and all(
+        isinstance(group.kv_cache_spec, UniformTypeKVCacheSpecs)
+        for group in kv_cache_groups
+    )
+
+
+def _get_packed_kv_cache_arena(
+    kv_cache_groups: list[KVCacheGroupSpec],
+) -> tuple[int, list[int], list[list[str]]]:
+    """Lay out each group densely in one shared block window.
+
+    Returns (block_stride, slot_offsets, shared_by): layers from different
+    groups may share a slot offset (their windows overlap); layers within a
+    group remain disjoint.
+    """
+    layers_by_offset: dict[int, list[str]] = defaultdict(list)
+    block_stride = 0
+    for group in kv_cache_groups:
+        byte_offset = 0
+        for layer_name in group.layer_names:
+            layers_by_offset[byte_offset].append(layer_name)
+            byte_offset += _get_per_layer_spec(group, layer_name).page_size_bytes
+        block_stride = max(block_stride, byte_offset)
+    assert block_stride > 0
+    offsets = sorted(layers_by_offset)
+    return block_stride, offsets, [layers_by_offset[o] for o in offsets]
+
+
 def _validate_layout_compatibility(
     kv_cache_tensors: list[KVCacheTensor],
     kv_cache_groups: list[KVCacheGroupSpec],
 ) -> None:
     """Ensure [H, N, C] is contiguous when layers sharing a tensor differ."""
     layout = resolve_kv_cache_layout()
+
+    if any(tensor.block_stride is not None for tensor in kv_cache_tensors):
+        # Packed arenas view each layer independently with a dense page
+        # interior, so any layout with the block dim outermost per layer
+        # works; plane layouts (H outside B) cannot span an arena.
+        if layout.layer_view_order[0] != 0:
+            raise ValueError(
+                f"KV cache layout {layout.name} hoists heads outside the "
+                "block dim, which is incompatible with the packed KV cache "
+                "arena used by multi-group uniform-type models."
+            )
+        return
 
     # Layer-compact layouts keep every slot an independent byte range, so
     # layers sharing a tensor may have different (H, C) splits; each group's
@@ -1319,22 +1370,35 @@ def get_kv_cache_config_from_groups(
             kv_cache_groups=kv_cache_groups,
         )
 
-    buckets = _bucket_layers_by_page_size(kv_cache_groups)
-
-    page_sizes = list(buckets.keys())
-    bytes_per_block = sum(ps * len(buckets[ps]) for ps in page_sizes)
-    num_blocks = available_memory // bytes_per_block
-    num_blocks = may_override_num_blocks(vllm_config, num_blocks)
-
-    kv_cache_tensors: list[KVCacheTensor] = []
-    for ps in page_sizes:
-        shared_by = buckets[ps]
-        kv_cache_tensors.append(
-            KVCacheTensor(
-                size=ps * num_blocks * len(shared_by),
-                shared_by=shared_by,
-            )
+    if _use_packed_kv_cache_arena(kv_cache_groups):
+        block_stride, slot_offsets, shared_by = _get_packed_kv_cache_arena(
+            kv_cache_groups
         )
+        num_blocks = available_memory // block_stride
+        num_blocks = may_override_num_blocks(vllm_config, num_blocks)
+        kv_cache_tensors = [
+            KVCacheTensor(
+                size=block_stride * num_blocks,
+                shared_by=shared_by,
+                slot_offsets=slot_offsets,
+                block_stride=block_stride,
+            )
+        ]
+    else:
+        buckets = _bucket_layers_by_page_size(kv_cache_groups)
+
+        page_sizes = list(buckets.keys())
+        bytes_per_block = sum(ps * len(buckets[ps]) for ps in page_sizes)
+        num_blocks = available_memory // bytes_per_block
+        num_blocks = may_override_num_blocks(vllm_config, num_blocks)
+
+        kv_cache_tensors = [
+            KVCacheTensor(
+                size=ps * num_blocks * len(buckets[ps]),
+                shared_by=buckets[ps],
+            )
+            for ps in page_sizes
+        ]
 
     _validate_layout_compatibility(kv_cache_tensors, kv_cache_groups)
 

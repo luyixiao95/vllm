@@ -1072,7 +1072,13 @@ class NixlBaseConnectorWorker:
                     and cache.stride(2) == cache.shape[3]
                     and cache.stride(1) == cache.shape[2] * cache.shape[3]
                 )
-                if storage_is_block_major and not hnc_contiguous:
+                if storage_is_block_major and (
+                    not hnc_contiguous or block_stride > physical_page_size
+                ):
+                    # Also covers packed arenas: a layer's block stride spans
+                    # the whole per-block window (other layers' pages at
+                    # higher offsets), so per-layer regions would under-cover
+                    # aliased offsets with differing page sizes.
                     storage_block_len = storage.nbytes() // num_blocks
                     region_specs = [
                         (storage_addr, storage_block_len, storage_block_len)

@@ -327,6 +327,39 @@ def reshape_kv_cache(
     return [cache_logical[i] for i in range(num_layer_slots)]
 
 
+def reshape_packed_kv_cache(
+    raw: torch.Tensor,
+    spec: KVCacheSpec,
+    num_blocks: int,
+    layout: KVCacheLayout,
+    *,
+    slot_offset: int,
+    block_stride: int,
+    block_size: int | None = None,
+) -> torch.Tensor:
+    """View one layer of a packed-arena tensor as logical ``[B, H, N, C]``.
+
+    The layer's page starts at ``slot_offset`` bytes inside each
+    ``block_stride``-byte block window; the page interior is dense in
+    ``layout`` order.
+    """
+    shape_bytes = compute_layer_kv_cache_shape_bytes(spec, num_blocks, block_size)
+    order = layout.layer_view_order
+    assert order[0] == 0, (
+        "Packed KV arenas require the block dim to be the outermost physical "
+        "dim of each layer view."
+    )
+    physical_shape = tuple(shape_bytes[i] for i in order)
+    page_bytes = prod(shape_bytes[1:])
+    window = raw.view(-1, block_stride)[:, slot_offset : slot_offset + page_bytes]
+    inv_order = [order.index(i) for i in range(4)]
+    cache_logical = window.view(physical_shape).permute(*inv_order)
+    dtype = getattr(spec, "dtype", None)
+    if dtype is not None:
+        cache_logical = cache_logical.view(dtype)
+    return cache_logical
+
+
 @dataclass(frozen=True, kw_only=True)
 class AttentionSpec(KVCacheSpec):
     num_kv_heads: int
@@ -1023,6 +1056,14 @@ class KVCacheTensor:
 
     size: int  # total size in bytes
     shared_by: list[list[str]]  # shared_by[slot_idx] = [layer_names]
+    # Packed-arena overlay for multi-group models with heterogeneous page
+    # sizes: each block is a window of ``block_stride`` bytes into which every
+    # group packs its layers densely, and groups overlay each other (a block
+    # ID is owned by one group at a time). ``slot_offsets[slot_idx]`` is the
+    # byte offset of that slot's layers within the window. None for uniform
+    # slot slabs.
+    slot_offsets: list[int] | None = None
+    block_stride: int | None = None
 
 
 @dataclass

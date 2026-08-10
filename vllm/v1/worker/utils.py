@@ -32,9 +32,12 @@ from vllm.v1.kv_cache_interface import (
     FullAttentionSpec,
     KVCacheConfig,
     KVCacheGroupSpec,
+    KVCacheLayout,
     KVCacheSpec,
+    KVCacheTensor,
     MambaSpec,
     UniformTypeKVCacheSpecs,
+    reshape_packed_kv_cache,
 )
 from vllm.v1.worker.block_table import get_block_table_width
 
@@ -147,7 +150,10 @@ class KVBlockZeroer:
 
         if runner_only_attn_layers is None:
             runner_only_attn_layers = set()
-        seen_ptrs: set[int] = set()
+        # Overlaid layers (packed arenas) share a base address but may have
+        # different page sizes; keep the widest span per address so newly
+        # allocated blocks are fully zeroed for every overlaying group.
+        seen_ptrs: dict[int, int] = {}
         seg_addrs: list[int] = []
         seg_block_strides: list[int] = []
         seg_page_sizes: list[int] = []
@@ -169,9 +175,6 @@ class KVBlockZeroer:
                 if not isinstance(kv, torch.Tensor):
                     continue
                 dp = kv.data_ptr()
-                if dp in seen_ptrs:
-                    continue
-                seen_ptrs.add(dp)
 
                 el = kv.element_size()
                 block_stride_bytes = kv.stride(0) * el
@@ -193,9 +196,18 @@ class KVBlockZeroer:
                     off_bytes = sum(i * s for i, s in zip(outer, outer_strides))
                     assert (dp + off_bytes) % 4 == 0
                     for virtual_index in range(ratio):
-                        seg_addrs.append(
-                            dp + off_bytes + virtual_index * block_stride_bytes
-                        )
+                        addr = dp + off_bytes + virtual_index * block_stride_bytes
+                        if (idx := seen_ptrs.get(addr)) is not None:
+                            assert (
+                                seg_block_strides[idx]
+                                == logical_block_stride_bytes // 4
+                            )
+                            seg_page_sizes[idx] = max(
+                                seg_page_sizes[idx], kernel_page_bytes // 4
+                            )
+                            continue
+                        seen_ptrs[addr] = len(seg_addrs)
+                        seg_addrs.append(addr)
                         seg_block_strides.append(logical_block_stride_bytes // 4)
                         seg_page_sizes.append(kernel_page_bytes // 4)
 
@@ -366,6 +378,46 @@ def select_common_block_size(
         if block_size_is_supported(backends, supported_size):
             return supported_size
     raise ValueError(f"No common block size for {kv_manager_block_size}. ")
+
+
+def reshape_packed_arena_kv_cache(
+    buf: torch.Tensor,
+    kv_cache_tensor: KVCacheTensor,
+    kv_cache_groups: list[KVCacheGroupSpec],
+    kernel_block_sizes: list[int] | None,
+    layout: KVCacheLayout,
+) -> dict[str, torch.Tensor]:
+    """Per-layer [B, H, N, C] views into a packed-arena KVCacheTensor."""
+    assert kv_cache_tensor.slot_offsets is not None
+    assert kv_cache_tensor.block_stride is not None
+    block_stride = kv_cache_tensor.block_stride
+    num_blocks = kv_cache_tensor.size // block_stride
+    layer_to_offset = {
+        name: kv_cache_tensor.slot_offsets[slot_idx]
+        for slot_idx, slot_layers in enumerate(kv_cache_tensor.shared_by)
+        for name in slot_layers
+    }
+    kv_caches: dict[str, torch.Tensor] = {}
+    for group_id, group in enumerate(kv_cache_groups):
+        for layer_name in group.layer_names:
+            if layer_name not in layer_to_offset:
+                continue
+            spec = group.kv_cache_spec
+            if isinstance(spec, UniformTypeKVCacheSpecs):
+                spec = spec.kv_cache_specs[layer_name]
+            if kernel_block_sizes is not None and group_id < len(kernel_block_sizes):
+                assert kernel_block_sizes[group_id] == spec.block_size, (
+                    "Packed KV arenas do not support kernel block splitting."
+                )
+            kv_caches[layer_name] = reshape_packed_kv_cache(
+                buf,
+                spec,
+                num_blocks,
+                layout,
+                slot_offset=layer_to_offset[layer_name],
+                block_stride=block_stride,
+            )
+    return kv_caches
 
 
 def prepare_kernel_block_sizes(

@@ -240,6 +240,7 @@ from .utils import (
     bind_kv_cache,
     copy_kv_cache_blocks_inplace,
     prepare_kernel_block_sizes,
+    reshape_packed_arena_kv_cache,
     sanity_check_mm_encoder_outputs,
 )
 
@@ -7406,6 +7407,18 @@ class GPUModelRunner(
             for slot_idx, slot_layers in enumerate(kv_cache_tensor.shared_by):
                 for layer_name in slot_layers:
                     layer_to_slot_idx[layer_name] = slot_idx
+
+            if kv_cache_tensor.block_stride is not None:
+                kv_caches.update(
+                    reshape_packed_arena_kv_cache(
+                        buf,
+                        kv_cache_tensor,
+                        kv_cache_config.kv_cache_groups,
+                        kernel_block_sizes,
+                        layout,
+                    )
+                )
+                continue
 
             num_slots = len(kv_cache_tensor.shared_by)
             bytes_per_slot = kv_cache_tensor.size // num_slots

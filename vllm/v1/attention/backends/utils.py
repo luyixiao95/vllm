@@ -177,11 +177,16 @@ def get_flashinfer_layout_string() -> str:
 def set_kv_cache_layout(cache_layout: "KVCacheLayoutType | None"):
     """Install a test-only layout override (highest priority)."""
     global _KV_CACHE_LAYOUT_OVERRIDE, _RESOLVED_KV_CACHE_LAYOUT
+    global _RESOLVED_LAYOUT_REQUIRED_BY
     _KV_CACHE_LAYOUT_OVERRIDE = cache_layout
     _RESOLVED_KV_CACHE_LAYOUT = None
+    _RESOLVED_LAYOUT_REQUIRED_BY = None
 
 
 _RESOLVED_KV_CACHE_LAYOUT: KVCacheLayout | None = None
+# Name of the backend whose get_required_kv_cache_layout() published the
+# resolved layout, if any; used to detect conflicting requirements.
+_RESOLVED_LAYOUT_REQUIRED_BY: str | None = None
 
 
 def _layout_from_name(layout_name: str) -> KVCacheLayout:
@@ -218,12 +223,23 @@ def initialize_kv_cache_layout(
     process-local mirror for callers without a config handle. Priority is
     main-parity: a backend-required layout silently corrects the env var.
     """
-    global _RESOLVED_KV_CACHE_LAYOUT
+    global _RESOLVED_KV_CACHE_LAYOUT, _RESOLVED_LAYOUT_REQUIRED_BY
     if _KV_CACHE_LAYOUT_OVERRIDE is not None:
         return
     required = backend.get_required_kv_cache_layout()
     layout_name = required
     if layout_name is not None:
+        if (
+            _RESOLVED_LAYOUT_REQUIRED_BY is not None
+            and _RESOLVED_KV_CACHE_LAYOUT is not None
+            and _RESOLVED_KV_CACHE_LAYOUT.name != required
+        ):
+            raise ValueError(
+                f"Backend {backend.get_name()} requires KV cache layout "
+                f"{required}, but {_RESOLVED_LAYOUT_REQUIRED_BY} already "
+                f"requires {_RESOLVED_KV_CACHE_LAYOUT.name}."
+            )
+        _RESOLVED_LAYOUT_REQUIRED_BY = backend.get_name()
         logger.info_once(
             "Using %s KV cache layout for %s backend.",
             layout_name,

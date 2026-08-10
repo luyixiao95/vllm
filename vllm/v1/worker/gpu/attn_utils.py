@@ -30,6 +30,7 @@ from vllm.v1.worker.utils import (
     add_kv_sharing_layers_to_kv_cache_groups,
     bind_kv_cache,
     prepare_kernel_block_sizes,
+    reshape_packed_arena_kv_cache,
 )
 
 logger = init_logger(__name__)
@@ -192,6 +193,18 @@ def _allocate_and_reshape_kv_cache(
     for kv_cache_tensor in kv_cache_config.kv_cache_tensors:
         num_layer_slots = len(kv_cache_tensor.shared_by)
         buf = torch.zeros(kv_cache_tensor.size, dtype=torch.int8, device=device)
+
+        if kv_cache_tensor.block_stride is not None:
+            kv_caches.update(
+                reshape_packed_arena_kv_cache(
+                    buf,
+                    kv_cache_tensor,
+                    kv_cache_config.kv_cache_groups,
+                    kernel_block_sizes,
+                    layout,
+                )
+            )
+            continue
 
         layer_to_slot: dict[str, int] = {}
         for slot_idx, slot_layers in enumerate(kv_cache_tensor.shared_by):
