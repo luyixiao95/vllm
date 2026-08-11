@@ -241,13 +241,20 @@ class RequestRunner:
                 )
             ]
 
+        # Groups overlay one allocation sized by the largest group's dense
+        # packing; each group's layers are one run of that allocation.
+        window = max(
+            group.kv_cache_spec.page_size_bytes * len(group.layer_names)
+            for group in kv_cache_groups
+        )
         kv_cache_tensors = [
             KVCacheTensor(
-                size=group.kv_cache_spec.page_size_bytes * num_gpu_blocks,
-                shared_by=[layer_name],
+                size=window * num_gpu_blocks,
+                layers=list(group.layer_names),
+                layer_stride=group.kv_cache_spec.page_size_bytes * num_gpu_blocks,
+                block_stride=group.kv_cache_spec.page_size_bytes,
             )
             for group in kv_cache_groups
-            for layer_name in group.layer_names
         ]
 
         kv_cache_config = KVCacheConfig(
@@ -277,7 +284,7 @@ class RequestRunner:
         )
 
         # register worker kv_caches to enable OffloadingWorker creations
-        # set_current_vllm_config is needed for get_kv_cache_layout() to work
+        # set_current_vllm_config is needed for resolve_kv_cache_layout() to work
         kv_caches: dict[str, torch.Tensor] = {}
         for group in kv_cache_groups:
             spec = group.kv_cache_spec
