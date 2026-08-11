@@ -66,8 +66,11 @@ else:
 
 logger = init_logger(__name__)
 
+V2_ONLY_MODEL_RUNNER_ARCHITECTURES = frozenset({"DeepseekV4ForCausalLM"})
+
 DEFAULT_V2_MODEL_RUNNER_ARCHITECTURES = frozenset(
     {
+        *V2_ONLY_MODEL_RUNNER_ARCHITECTURES,
         "DeepseekV2ForCausalLM",
         "GraniteMoeForCausalLM",
         "InklingForCausalLM",
@@ -622,6 +625,13 @@ class VllmConfig:
     @property
     def use_v2_model_runner(self) -> bool:
         use_v2_model_runner = envs.VLLM_USE_V2_MODEL_RUNNER
+        if self._is_v2_only_model_runner_model():
+            if use_v2_model_runner is False:
+                raise ValueError(
+                    "DeepSeek V4 requires Model Runner V2. "
+                    "Remove VLLM_USE_V2_MODEL_RUNNER=0."
+                )
+            return True
         if use_v2_model_runner is not None:
             return use_v2_model_runner
 
@@ -701,6 +711,13 @@ class VllmConfig:
         if getattr(model_config, "is_attention_free", False):
             return False
         return is_default_v2_architecture or not model_config.is_moe
+
+    def _is_v2_only_model_runner_model(self) -> bool:
+        model_config = self.model_config
+        if model_config is None:
+            return False
+        architectures = getattr(model_config, "architectures", [])
+        return any(arch in V2_ONLY_MODEL_RUNNER_ARCHITECTURES for arch in architectures)
 
     @property
     def needs_dp_coordinator(self) -> bool:

@@ -66,6 +66,34 @@ def test_v2_model_runner_env_tri_state(monkeypatch, env_value, expected):
     assert envs.VLLM_USE_V2_MODEL_RUNNER is expected
 
 
+@pytest.mark.parametrize("env_value", [None, "1"])
+def test_v2_only_model_selects_v2(monkeypatch, env_value):
+    if env_value is None:
+        monkeypatch.delenv("VLLM_USE_V2_MODEL_RUNNER", raising=False)
+    else:
+        monkeypatch.setenv("VLLM_USE_V2_MODEL_RUNNER", env_value)
+
+    config = SimpleNamespace(_is_v2_only_model_runner_model=lambda: True)
+
+    assert VllmConfig.use_v2_model_runner.fget(config)
+
+
+def test_v2_only_model_rejects_v1(monkeypatch):
+    monkeypatch.setenv("VLLM_USE_V2_MODEL_RUNNER", "0")
+    config = SimpleNamespace(_is_v2_only_model_runner_model=lambda: True)
+
+    with pytest.raises(ValueError, match="DeepSeek V4 requires Model Runner V2"):
+        VllmConfig.use_v2_model_runner.fget(config)
+
+
+def test_deepseek_v4_is_v2_only():
+    config = SimpleNamespace(
+        model_config=SimpleNamespace(architectures=["DeepseekV4ForCausalLM"])
+    )
+
+    assert VllmConfig._is_v2_only_model_runner_model(config)
+
+
 @pytest.mark.parametrize(
     ("use_v2_model_runner", "expected_capture_sizes"),
     [
@@ -176,6 +204,16 @@ def test_resolve_cudagraph_mode_adjusts_spec_decode_sizes_only_for_v1(
                 runner_type="generate",
                 is_moe=True,
                 is_quantized=False,
+            ),
+            True,
+        ),
+        (
+            SimpleNamespace(
+                model="deepseek-ai/DeepSeek-V4-Flash",
+                architectures=["DeepseekV4ForCausalLM"],
+                runner_type="generate",
+                is_moe=True,
+                is_quantized=True,
             ),
             True,
         ),
