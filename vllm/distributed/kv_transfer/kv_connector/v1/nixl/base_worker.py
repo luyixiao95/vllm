@@ -778,7 +778,7 @@ class NixlBaseConnectorWorker:
                         else:
                             # Packed KV layout is logical (B, H, N, 2*D). Allocate
                             # (B, N, H, 2*D) and view it as logical (B, H, N, 2*D)
-                            # so raw NIXL transfers see NHC physical strides.
+                            # so raw NIXL transfers see NHD physical strides.
                             kv_shape = tuple(kv_shape[i] for i in inv_order)
                             permute_shape = True
 
@@ -993,14 +993,9 @@ class NixlBaseConnectorWorker:
         seen_storage_addresses: set[int] = set()
         seen_base_addresses: list[int] = []
 
-        # Note(tms): I modified this from the original region setup code.
-        # K and V are now in different regions. Advantage is that we can
-        # elegantly support MLA and any cases where the K and V tensors
-        # are non-contiguous (it's not locally guaranteed that they will be)
-        # Disadvantage is that the encoded NixlAgentMetadata is now larger
-        # (roughly 8KB vs 5KB).
-        # Conversely for FlashInfer, K and V are registered in the same region
-        # to better exploit the memory layout (ie num_blocks is the first dim).
+        # K and V are packed into the content dim, so each attention layer is a
+        # single NIXL region whose block transfers as one unit. Mamba layers
+        # instead register separate conv/ssm sub-regions.
         for layer_name, cache in xfer_buffers.items():
             # NOTE (NickLucche) Hybrid SSM mamba/FA physical page_size may differ when
             # kernel requires a specific block size. This leads to SSM and FA layers
@@ -1072,13 +1067,7 @@ class NixlBaseConnectorWorker:
                     and cache.stride(2) == cache.shape[3]
                     and cache.stride(1) == cache.shape[2] * cache.shape[3]
                 )
-                if storage_is_block_major and (
-                    not hnc_contiguous or block_stride > physical_page_size
-                ):
-                    # Also covers packed arenas: a layer's block stride spans
-                    # the whole per-block window (other layers' pages at
-                    # higher offsets), so per-layer regions would under-cover
-                    # aliased offsets with differing page sizes.
+                if storage_is_block_major and not hnc_contiguous:
                     storage_block_len = storage.nbytes() // num_blocks
                     region_specs = [
                         (storage_addr, storage_block_len, storage_block_len)
@@ -1707,7 +1696,7 @@ class NixlBaseConnectorWorker:
             else:
                 raise RuntimeError(
                     "Heterogeneous TP expects same kv_cache_layout. "
-                    "Or enable experimental feature to use HNC to NHC support by "
+                    "Or enable experimental feature to use HND to NHD support by "
                     "setting 'enable_permute_local_kv'=True in --kv-transfer-config."
                 )
         # if remote_agent used attn is not same as local,
@@ -1727,7 +1716,7 @@ class NixlBaseConnectorWorker:
             self.enable_heterogeneous_attn_post_process = True
 
         # Heterogeneous TP requires head-splitting, which only works with
-        # block-contiguous layouts (H before N, e.g. HNC / BHLNC).
+        # block-contiguous layouts (H before N, e.g. LBHNC / BHLNC).
         # MLA and replicated-KV cases don't split on heads.
         if (
             abs(tp_ratio) != 1
@@ -1738,7 +1727,7 @@ class NixlBaseConnectorWorker:
         ):
             raise RuntimeError(
                 "Heterogeneous TP head-dimension splitting requires contiguous heads. "
-                "Use HNC layout on the prefill side."
+                "Use a block-contiguous layout (e.g. LBHNC) on the prefill side."
             )
 
         # Per-region block_len validation enforcing the P/D invariant.
@@ -1882,11 +1871,11 @@ class NixlBaseConnectorWorker:
         Post process device kv cache after receiving from remote.
 
         3 types of post processing supported:
-            * kv_cache_postprocess_layout => convert from HNC to NHC
+            * kv_cache_postprocess_layout => convert from HND to NHD
             * kv_cache_postprocess_blksize => convert from small block size
               to large block size
             * kv_cache_postprocess_blksize_and_layout => convert from small
-              block size to large block size and convert from HNC to NHC
+              block size to large block size and convert from HND to NHD
 
         The transfer only covers ``covered_sub_blocks`` remote-sized
         sub-blocks of each request's local attention blocks; the rest was
@@ -1909,14 +1898,14 @@ class NixlBaseConnectorWorker:
         elif self.enable_permute_local_kv and block_size_ratio > 1:
             logger.debug(
                 "Post-processing device kv cache on receive by converting "
-                "block_size with %sx bigger and permuting layout from HNC"
-                " to NHC.",
+                "block_size with %sx bigger and permuting layout from HND"
+                " to NHD.",
                 block_size_ratio,
             )
         elif self.enable_permute_local_kv:
             logger.debug(
                 "Post-processing device kv cache on receive by permuting layout"
-                "from HNC to NHC."
+                "from HND to NHD."
             )
         else:
             logger.debug(

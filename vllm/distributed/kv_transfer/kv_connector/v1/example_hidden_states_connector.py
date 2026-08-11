@@ -591,7 +591,7 @@ class ExampleHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
             vllm_config (VllmConfig): the vllm config.
 
         Returns:
-            str: the required KV cache layout. e.g. HNC, or NHC.
+            str: the required KV cache layout. e.g. HND, or NHD.
             None if the connector does not require a specific layout.
         """
 

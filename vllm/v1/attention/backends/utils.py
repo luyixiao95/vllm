@@ -152,8 +152,6 @@ def fill_mm_prefix_query_ranges(
 _LAYOUT_COMPAT_ALIASES = {
     "NHD": "LBNHC",
     "HND": "LBHNC",
-    "NHC": "LBNHC",
-    "HNC": "LBHNC",
 }
 _FLASHINFER_LAYOUT_NAMES = {
     "LBNHC": "NHD",

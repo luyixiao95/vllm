@@ -7,7 +7,6 @@ from typing import Any, cast
 import torch
 
 from vllm.config import VllmConfig, get_layers_from_vllm_config
-from vllm.logger import init_logger
 from vllm.model_executor.layers.attention import Attention
 from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
 from vllm.multimodal.inputs import MultiModalFeatureSpec
@@ -31,8 +30,6 @@ from vllm.v1.worker.utils import (
     bind_kv_cache,
     prepare_kernel_block_sizes,
 )
-
-logger = init_logger(__name__)
 
 
 @dataclass(frozen=True)

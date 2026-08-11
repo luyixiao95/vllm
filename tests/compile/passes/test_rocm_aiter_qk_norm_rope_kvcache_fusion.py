@@ -171,7 +171,7 @@ class QKNormRoPEKVCacheTestModel(torch.nn.Module):
             raw_tensor,
             self.kv_cache_spec,
             num_blocks,
-            num_layer_slots=1,
+            num_layers=1,
             layout=layout,
         )[0]
 

@@ -35,9 +35,9 @@ def canonical_format_id() -> str:
     """Identity of the canonical byte format, for namespacing persisted KV.
     Canonical pages keep the worker's KV layout family, so the id couples the
     format version with that family; consumers must match it exactly."""
-    from vllm.v1.attention.backends.utils import get_kv_cache_layout
+    from vllm.v1.attention.backends.utils import resolve_kv_cache_layout
 
-    return f"v{CANONICAL_FORMAT_VERSION}-{get_kv_cache_layout().lower()}"
+    return f"v{CANONICAL_FORMAT_VERSION}-{resolve_kv_cache_layout().name.lower()}"
 
 
 @dataclass(frozen=True)

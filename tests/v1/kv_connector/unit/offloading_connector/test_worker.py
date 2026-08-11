@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-from collections import defaultdict
 from unittest.mock import MagicMock
 
 import pytest
@@ -69,28 +68,13 @@ def _allocate_and_reshape_kv_caches(
     attn_groups: list[list],
     device: torch.device,
 ):
-    """
-    Use the real GPUModelRunner allocation and reshape methods to produce
-    kv_caches, just like the model runner does during initialization.
-    """
+    """Allocate kv_caches exactly as the model runner does at startup."""
     from vllm.v1.kv_cache_interface import KVCacheLayout
-    from vllm.v1.worker.gpu_model_runner import GPUModelRunner
-
-    runner = object.__new__(GPUModelRunner)
-    runner.device = device
-    runner.runner_only_attn_layers = set()
-    runner.attn_groups = attn_groups
-    runner.kv_cache_config = kv_cache_config
-    runner.cache_config = MagicMock(cache_dtype="auto")
-    runner.shared_kv_cache_layers = {}
-    runner.model_config = MagicMock()
-    runner.model_config.hf_config.model_type = ""
-    runner.compilation_config = MagicMock(static_forward_context=defaultdict(MagicMock))
-    runner.kv_caches = []
+    from vllm.v1.worker.utils import allocate_and_reshape_kv_cache
 
     kernel_block_sizes = [BLOCK_SIZE] * len(kv_cache_config.kv_cache_groups)
-    return runner._allocate_and_reshape_kv_cache(
-        kv_cache_config, kernel_block_sizes, layout=KVCacheLayout.LBNHC
+    return allocate_and_reshape_kv_cache(
+        kv_cache_config, device, KVCacheLayout.LBNHC, kernel_block_sizes
     )
 
 

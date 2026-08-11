@@ -38,7 +38,7 @@ from vllm.v1.kv_cache_interface import (
     MambaSpec,
     UniformTypeKVCacheSpecs,
     compute_layer_kv_cache_shape_bytes,
-    reshape_kv_cache,
+    reshape_packed_kv_cache,
 )
 from vllm.v1.worker.block_table import get_block_table_width
 
@@ -151,7 +151,7 @@ class KVBlockZeroer:
 
         if runner_only_attn_layers is None:
             runner_only_attn_layers = set()
-        # Overlaid layers (packed arenas) share a base address but may have
+        # Overlaid layers (packed layouts) share a base address but may have
         # different page sizes; keep the widest span per address so newly
         # allocated blocks are fully zeroed for every overlaying group.
         seen_ptrs: dict[int, int] = {}
@@ -440,7 +440,7 @@ def allocate_and_reshape_kv_cache(
                 block_stride //= ratio
                 num_blocks *= ratio
 
-        views = reshape_kv_cache(
+        views = reshape_packed_kv_cache(
             buf,
             spec,
             num_blocks,

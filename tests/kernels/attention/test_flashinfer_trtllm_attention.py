@@ -110,7 +110,7 @@ def make_nvfp4_kv_cache(
         kv_scale_tensor,
     )
 
-    # Split into data/scale views in HNC order for trtllm kernel.
+    # Split into data/scale views in HND order for trtllm kernel.
     k_cache_hnc, v_cache_hnc = kv_cache_hnd.split(num_kv_heads, dim=1)
     k_data, k_scales = nvfp4_split_data_scale(k_cache_hnc)
     v_data, v_scales = nvfp4_split_data_scale(v_cache_hnc)

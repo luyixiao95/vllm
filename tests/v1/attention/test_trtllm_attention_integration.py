@@ -20,7 +20,6 @@ from vllm.platforms import current_platform
 from vllm.utils.torch_utils import nvfp4_kv_cache_full_dim, set_random_seed
 from vllm.v1.attention.backends.utils import (
     PerLayerParameters,
-    resolve_kv_cache_layout,
     set_kv_cache_layout,
 )
 from vllm.v1.kv_cache_interface import FullAttentionSpec, KVCacheLayout, KVQuantMode
@@ -251,7 +250,7 @@ def _run_trtllm_integration(batch_spec, kv_cache_dtype="auto", model_name=MODEL)
 
     common_attn_metadata = create_common_attn_metadata(batch_spec, BLOCK_SIZE, device)
 
-    # 2. Create HNC KV cache
+    # 2. Create HND KV cache
     is_nvfp4 = kv_cache_dtype == "nvfp4"
     if is_nvfp4:
         # Compute a global scale from the context data.
@@ -286,7 +285,6 @@ def _run_trtllm_integration(batch_spec, kv_cache_dtype="auto", model_name=MODEL)
 
     # 3. Run through FlashInfer with TRTLLM enabled
     set_kv_cache_layout("LBHNC")
-    resolve_kv_cache_layout.cache_clear()
 
     try:
         is_nvfp4 = kv_cache_dtype == "nvfp4"
@@ -402,7 +400,6 @@ def _run_trtllm_integration(batch_spec, kv_cache_dtype="auto", model_name=MODEL)
 
     finally:
         set_kv_cache_layout(None)
-        resolve_kv_cache_layout.cache_clear()
 
 
 @pytest.mark.parametrize(

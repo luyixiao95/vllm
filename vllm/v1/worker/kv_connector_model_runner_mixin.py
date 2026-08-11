@@ -12,7 +12,6 @@ from vllm.config import VllmConfig
 from vllm.distributed.kv_transfer import get_kv_transfer_group, has_kv_transfer_group
 from vllm.distributed.kv_transfer.kv_connector.base import KVConnectorBase
 from vllm.forward_context import get_forward_context, set_forward_context
-from vllm.logger import init_logger
 from vllm.v1.outputs import (
     KVConnectorOutput,
     ModelRunnerOutput,
@@ -20,8 +19,6 @@ from vllm.v1.outputs import (
 
 if TYPE_CHECKING:
     from vllm.v1.core.sched.output import SchedulerOutput
-
-logger = init_logger(__name__)
 
 
 # Defined as a kv connector functionality mixin for ModelRunner (GPU, TPU)

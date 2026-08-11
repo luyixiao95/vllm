@@ -13,6 +13,7 @@ is launched.
 
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from vllm.v1.kv_cache_interface import (
@@ -21,6 +22,8 @@ from vllm.v1.kv_cache_interface import (
     reshape_kv_cache,
 )
 from vllm.v1.worker.utils import AttentionGroup, KVBlockZeroer
+
+pytestmark = pytest.mark.cpu_test
 
 NUM_BLOCKS = 100
 NUM_LAYERS = 4
@@ -161,5 +164,5 @@ def test_overlaid_zeroer_dedups_segments_with_max_span():
     }
     assert by_offset[0] == max(pages["g1.big"], pages["g2.huge"])
     assert by_offset[pages["g1.big"]] == pages["g1.small"]
-    window = max(sum(pages[n] for n in g) for g in (g1_specs, g2_specs))
-    assert (seg_block_strides * 4 == window).all()
+    packed_block_stride = max(sum(pages[n] for n in g) for g in (g1_specs, g2_specs))
+    assert (seg_block_strides * 4 == packed_block_stride).all()

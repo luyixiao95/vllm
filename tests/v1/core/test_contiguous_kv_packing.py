@@ -2,11 +2,11 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Tests for KV cache packing.
 
-Every cache group packs its layers densely into a per-block window; groups
-overlay each other (a block ID is owned by one group at a time), so bytes
-per block is the largest group's packing. The layout decides whether the
-layer dim sits outside the block dim (per-layer regions) or inside it
-(per-block windows); the allocation is the same either way.
+Every cache group packs its layers densely into one block; groups overlay
+each other (a block ID is owned by one group at a time), so the packed block
+stride is the largest group's packing. The layout decides whether the layer
+dim sits outside the block dim (a contiguous region per layer) or inside it
+(all layers' pages within each block); the allocation is the same either way.
 """
 
 from unittest.mock import MagicMock
@@ -19,7 +19,7 @@ from vllm.v1.attention.backends.utils import (
     set_kv_cache_layout,
 )
 from vllm.v1.core.kv_cache_utils import (
-    _pack_layers_densely,
+    _get_packed_kv_cache_layout,
     _pool_bytes_per_block,
     get_kv_cache_config_from_groups,
 )
@@ -84,7 +84,7 @@ def _pages(groups) -> dict[str, int]:
     }
 
 
-def _window(groups) -> int:
+def _packed_block_stride(groups) -> int:
     pages = _pages(groups)
     return max(sum(pages[n] for n in g.layer_names) for g in groups)
 
@@ -96,10 +96,10 @@ def _bind(config):
 
 
 class TestDensePacking:
-    def test_window_is_largest_group_packing(self):
+    def test_packed_block_stride_is_largest_group_packing(self):
         groups, g1, g2 = _mixed_page_groups()
-        window, runs = _pack_layers_densely(groups)
-        assert window == _window(groups)
+        block_stride, runs = _get_packed_kv_cache_layout(groups)
+        assert block_stride == _packed_block_stride(groups)
         # Groups overlay: both start at offset 0.
         assert [offset for offset, _, _ in runs].count(0) == 2
         # Layers of one shape form one run, in layer order.
@@ -112,7 +112,7 @@ class TestDensePacking:
     def test_layers_within_a_group_are_dense(self):
         groups, _, _ = _mixed_page_groups()
         pages = _pages(groups)
-        _, runs = _pack_layers_densely(groups)
+        _, runs = _get_packed_kv_cache_layout(groups)
         offsets = {
             name: run_offset + i * pages[name]
             for run_offset, layers, _ in runs
@@ -149,11 +149,13 @@ class TestDensePacking:
         groups = [_uniform_group(specs)]
         set_kv_cache_layout(layout)
         config = get_kv_cache_config_from_groups(_mock_vllm_config(), groups, MEMORY)
-        window = _window(groups)
+        block_stride = _packed_block_stride(groups)
         mla_tensor, idx_tensor = config.kv_cache_tensors
         assert mla_tensor.layers == ["mla.0", "mla.1"]
         assert idx_tensor.layers == ["idx.0"]
-        assert {t.size for t in config.kv_cache_tensors} == {window * config.num_blocks}
+        assert {t.size for t in config.kv_cache_tensors} == {
+            block_stride * config.num_blocks
+        }
         if layout == "LBNHC":
             assert (
                 idx_tensor.offset == 2 * _mla(512).page_size_bytes * config.num_blocks
@@ -161,13 +163,13 @@ class TestDensePacking:
             assert mla_tensor.block_stride == _mla(512).page_size_bytes
         else:
             assert idx_tensor.offset == 2 * _mla(512).page_size_bytes
-            assert mla_tensor.block_stride == window
+            assert mla_tensor.block_stride == block_stride
 
     def test_overlaid_groups_alias_and_stay_isolated(self):
         groups, g1, g2 = _mixed_page_groups()
         config = get_kv_cache_config_from_groups(_mock_vllm_config(), groups, MEMORY)
-        assert config.num_blocks == MEMORY // _window(groups)
-        assert _pool_bytes_per_block(groups) == _window(groups)
+        assert config.num_blocks == MEMORY // _packed_block_stride(groups)
+        assert _pool_bytes_per_block(groups) == _packed_block_stride(groups)
 
         views = _bind(config)
         assert set(views) == set(g1) | set(g2)

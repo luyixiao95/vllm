@@ -426,10 +426,6 @@ class TransferTopology:
 
         self._engines: dict[tuple[EngineId, int], EngineTransferInfo] = {}
 
-        # Cross-layer layouts (BLHNC) have B outermost, so all layers
-        # for a block are contiguous — transfers can coalesce multiple
-        # layers into one operation.
-
     # ============================================================
     # Engine registration
     # ============================================================
@@ -463,10 +459,6 @@ class TransferTopology:
         # Remove all pp_rank entries for the remote engine.
         for key in [k for k in self._engines if k[0] == remote_engine_id]:
             del self._engines[key]
-
-    # ============================================================
-    # Layout properties
-    # ============================================================
 
     # ============================================================
     # Common methods

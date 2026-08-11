@@ -852,7 +852,7 @@ class FlashAttentionImpl(AttentionImpl):
             key: shape = [num_tokens, num_kv_heads, head_size]
             value: shape = [num_tokens, num_kv_heads, head_size]
             kv_cache: shape =
-                [num_blocks, num_kv_heads, block_size, 2*head_size]
+                [num_blocks, num_kv_heads, block_size, 2 * head_size]
             attn_metadata: Metadata for attention.
         Returns:
             shape = [num_tokens, num_heads * head_size]
@@ -899,7 +899,7 @@ class FlashAttentionImpl(AttentionImpl):
                 layer,
             )
 
-        # (B, H, N, 2*head_size) -> ((B, N, H, head_size), (B, N, H, head_size))
+        # (B, H, N, 2*D) -> ((B, N, H, D), (B, N, H, D))
         key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
         # Fix degenerate strides on size-1 dims (e.g. num_kv_heads=1 with TP).
         # FA3/4 on H100+ uses TMA, which requires ≥16-byte stride alignment.
@@ -1116,7 +1116,7 @@ class FlashAttentionImpl(AttentionImpl):
         # Scatter write into the KV cache using slot_mapping indices.
         # No TMA kernel is invoked here, so stride canonicalization is not needed.
         # (B, H, N, 2*D) -> ((B, N, H, D), (B, N, H, D))
-        k_cache, v_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
+        key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
 
         # Reshape the input keys and values and store them in the cache.
         # Skip this if sharing KV cache with an earlier attention layer.
@@ -1128,8 +1128,8 @@ class FlashAttentionImpl(AttentionImpl):
         reshape_and_cache_flash(
             key,
             value,
-            k_cache,
-            v_cache,
+            key_cache,
+            value_cache,
             slot_mapping,
             self.kv_cache_dtype,
             layer._k_scale,
@@ -1657,11 +1657,10 @@ def cascade_attention(
 
     num_tokens = query.shape[0]
     block_size = key_cache.shape[-3]
-    num_kv_heads = key_cache.shape[-2]
     assert common_prefix_len % block_size == 0
     num_common_kv_blocks = common_prefix_len // block_size
     assert num_common_kv_blocks > 0
-    descale_shape = (cu_prefix_query_lens.shape[0] - 1, num_kv_heads)
+    descale_shape = (cu_prefix_query_lens.shape[0] - 1, key_cache.shape[-2])
 
     # Process shared prefix.
     prefix_output, prefix_lse = flash_attn_varlen_func(
@@ -1689,7 +1688,7 @@ def cascade_attention(
         num_splits=1 if envs.VLLM_BATCH_INVARIANT else max_num_splits,
     )
 
-    descale_shape = (cu_query_lens.shape[0] - 1, num_kv_heads)
+    descale_shape = (cu_query_lens.shape[0] - 1, key_cache.shape[-2])
 
     # Process suffix per query.
     suffix_output, suffix_lse = flash_attn_varlen_func(

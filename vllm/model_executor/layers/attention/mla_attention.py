@@ -2521,7 +2521,7 @@ class MLACommonBaseImpl(MLAAttentionImpl[A], Generic[A]):
                 )
             elif not use_fp8_prefill:
                 ops.gather_and_maybe_dequant_cache(
-                    src_cache=kv_c_and_k_pe_cache.squeeze(1),
+                    src_cache=kv_c_and_k_pe_cache,
                     dst=workspace,
                     block_table=block_table,
                     cu_seq_lens=chunk.cu_seq_lens,
@@ -2534,7 +2534,7 @@ class MLACommonBaseImpl(MLAAttentionImpl[A], Generic[A]):
             else:
                 # FP8 path: gather cache without dequantization
                 ops.cp_gather_cache(
-                    src_cache=kv_c_and_k_pe_cache.squeeze(1),
+                    src_cache=kv_c_and_k_pe_cache,
                     dst=workspace,
                     block_table=block_table,
                     cu_seq_lens=chunk.cu_seq_lens,
@@ -2631,7 +2631,7 @@ class MLACommonBaseImpl(MLAAttentionImpl[A], Generic[A]):
             elif is_quantized_kv_cache(self.kv_cache_dtype):
                 assert k_scale is not None
                 ops.gather_and_maybe_dequant_cache(
-                    src_cache=kv_c_and_k_pe_cache.squeeze(1),
+                    src_cache=kv_c_and_k_pe_cache,
                     dst=workspace,
                     block_table=block_table,
                     cu_seq_lens=padded_local_cu_seq_lens,
@@ -2643,7 +2643,7 @@ class MLACommonBaseImpl(MLAAttentionImpl[A], Generic[A]):
                 )
             else:
                 ops.cp_gather_cache(
-                    src_cache=kv_c_and_k_pe_cache.squeeze(1),
+                    src_cache=kv_c_and_k_pe_cache,
                     dst=workspace,
                     block_table=block_table,
                     cu_seq_lens=padded_local_cu_seq_lens,

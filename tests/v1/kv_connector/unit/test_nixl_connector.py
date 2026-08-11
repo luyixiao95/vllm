@@ -399,7 +399,7 @@ def test_kv_transfer_handshake(dist_init):
             raw,
             kv_cache_spec,
             kv_cache_config.num_blocks,
-            num_layer_slots=3,
+            num_layers=3,
             layout=KVCacheLayout.BLHNC,
         )
         kv_caches = {
@@ -1910,14 +1910,14 @@ def test_register_kv_caches(
             raw0,
             kv_cache_spec,
             kv_cache_config.num_blocks,
-            num_layer_slots=2,
+            num_layers=2,
             layout=KVCacheLayout[layout],
         )
         (tensor2,) = reshape_kv_cache(
             raw1,
             kv_cache_spec,
             kv_cache_config.num_blocks,
-            num_layer_slots=1,
+            num_layers=1,
             layout=KVCacheLayout[layout],
         )
         kv_caches = {

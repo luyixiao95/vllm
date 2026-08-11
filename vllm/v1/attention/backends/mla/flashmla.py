@@ -309,7 +309,7 @@ class FlashMLAImpl(MLACommonImpl[FlashMLAMetadata]):
         if is_quantized_kv_cache(self.kv_cache_dtype):
             o, lse = flash_mla_with_kvcache_fp8(
                 q=q,
-                k_cache=kv_c_and_k_pe_cache.unsqueeze(2),
+                k_cache=kv_c_and_k_pe_cache.unsqueeze(-2),  # Add head dim of 1
                 block_table=attn_metadata.decode.block_table,
                 cache_seqlens=attn_metadata.decode.seq_lens,
                 head_dim_v=self.kv_lora_rank,
@@ -323,7 +323,7 @@ class FlashMLAImpl(MLACommonImpl[FlashMLAMetadata]):
         else:
             o, lse = flash_mla_with_kvcache(
                 q=q,
-                k_cache=kv_c_and_k_pe_cache.unsqueeze(2),
+                k_cache=kv_c_and_k_pe_cache.unsqueeze(-2),  # Add head dim of 1
                 block_table=attn_metadata.decode.block_table,
                 cache_seqlens=attn_metadata.decode.seq_lens,
                 head_dim_v=self.kv_lora_rank,

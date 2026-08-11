@@ -45,7 +45,9 @@ class KVQuantMode(IntEnum):
     FP8_PER_TOKEN_HEAD = 3  # per-token-head dynamic scales for fp8
     INT4_PER_TOKEN_HEAD = 4  # packed 2×int4/byte, RHT + asymmetric zp
     NVFP4 = 5  # packed fp4 data + fp8 block scales
-    # Hadamard-rotated Lloyd-Max quant, packed K+V per slot.
+    # Hadamard-rotated Lloyd-Max quant, packed K+V per slot. One member per
+    # preset (member names mirror the ``kv_cache_dtype`` strings) so the mode
+    # alone identifies the slot format.
     TURBOQUANT_K8V4 = 6
     TURBOQUANT_4BIT_NC = 7
     TURBOQUANT_K3V4_NC = 8
@@ -285,22 +287,20 @@ def compute_layer_kv_cache_shape_bytes(
 def layer_kv_cache_strides(
     spec: KVCacheSpec,
     num_blocks: int,
+    num_layers: int,
     layout: KVCacheLayout,
-    window: int | None = None,
+    packed_block_stride: int | None = None,
     block_size: int | None = None,
 ) -> tuple[int, int]:
     """Byte strides ``(layer_stride, block_stride)`` for a set of layers.
 
-    Layer-outermost layouts give each layer a contiguous region; block-
-    outermost layouts make each block a window shared by all layers, so the
-    per-block window size is the block stride. ``window`` defaults to a dense
-    packing of one layer.
+    Without ``packed_block_stride`` the layers are the whole allocation, so
+    the strides are those of a dense 5D ``[L, B, H, N, C]`` tensor in
+    ``layout`` order. In a packed layout (layers of different page sizes laid
+    out within one block, cache groups overlaying each other) each layer's
+    page is dense and blocks step by the packed block stride.
     """
     shape_bytes = compute_layer_kv_cache_shape_bytes(spec, num_blocks, block_size)
-    order = layout.layer_view_order
-    physical_shape = tuple(shape_bytes[i] for i in order)
-    dense_strides = torch.empty(physical_shape, device="meta").stride()
-
     page = prod(shape_bytes[1:])
     if padded := getattr(spec, "page_size_padded", None):
         assert block_size is None or block_size == spec.block_size, (
@@ -308,13 +308,30 @@ def layer_kv_cache_strides(
         )
         page = padded
 
-    if not layout.is_layer_compact:
-        return page, window if window is not None else page
-    block_pos = order.index(_DIM_B - 1)
-    # Head planes sit outside blocks (e.g. LHBNC), so a block is one dense
-    # slice inside each plane rather than a whole page.
-    block_stride = page if block_pos == 0 else dense_strides[block_pos]
-    return page * num_blocks, block_stride
+    if packed_block_stride is not None:
+        assert layout.is_block_contiguous or layout.is_layer_compact, (
+            f"KV cache layout {layout.name} interleaves layers inside a block, "
+            "which cannot express layers of different page sizes."
+        )
+        if not layout.is_layer_compact:
+            return page, packed_block_stride
+        return page * num_blocks, page
+
+    logical_shape = (num_layers, *shape_bytes)
+    stride_order = layout.stride_order
+    physical_shape = tuple(logical_shape[i] for i in stride_order)
+    dense = torch.empty(physical_shape, device="meta").stride()
+    inv_order = [stride_order.index(i) for i in range(5)]
+    layer_stride = dense[inv_order[_DIM_L]]
+    block_stride = dense[inv_order[_DIM_B]]
+    if padded:
+        # Padding is per page, so only the outermost of L and B can absorb it.
+        assert {inv_order[_DIM_L], inv_order[_DIM_B]} == {0, 1}
+        inner = max(inv_order[_DIM_L], inv_order[_DIM_B])
+        strides = [padded, physical_shape[inner] * padded]
+        layer_stride = strides[0 if inv_order[_DIM_L] == inner else 1]
+        block_stride = strides[0 if inv_order[_DIM_B] == inner else 1]
+    return layer_stride, block_stride
 
 
 def reshape_kv_cache(
@@ -323,53 +340,68 @@ def reshape_kv_cache(
     num_blocks: int,
     num_layers: int,
     layout: KVCacheLayout,
+    block_size: int | None = None,
+) -> list[torch.Tensor]:
+    """View a flat int8 buffer as one 4D ``[B, H, N, C]`` view per layer,
+    with ``num_layers`` layers packed densely in ``layout`` order."""
+    layer_stride, block_stride = layer_kv_cache_strides(
+        spec, num_blocks, num_layers, layout, block_size=block_size
+    )
+    return reshape_packed_kv_cache(
+        raw,
+        spec,
+        num_blocks,
+        num_layers,
+        layout,
+        offset=0,
+        layer_stride=layer_stride,
+        block_stride=block_stride,
+        block_size=block_size,
+    )
+
+
+def reshape_packed_kv_cache(
+    raw: torch.Tensor,
+    spec: KVCacheSpec,
+    num_blocks: int,
+    num_layers: int,
+    layout: KVCacheLayout,
     *,
-    offset: int = 0,
-    layer_stride: int | None = None,
-    block_stride: int | None = None,
+    offset: int,
+    layer_stride: int,
+    block_stride: int,
     block_size: int | None = None,
 ) -> list[torch.Tensor]:
     """View a flat int8 buffer as one 4D ``[B, H, N, C]`` view per layer.
 
     Layer ``l``'s page for block ``b`` starts at
     ``offset + l * layer_stride + b * block_stride``; the page interior is
-    dense in ``layout`` order. Strides default to a dense packing of
-    ``num_layers`` layers.
+    dense in ``layout`` order.
     """
     shape_bytes = compute_layer_kv_cache_shape_bytes(spec, num_blocks, block_size)
-    if layer_stride is None or block_stride is None:
-        dense_page = getattr(spec, "page_size_padded", None) or prod(shape_bytes[1:])
-        dense_layer_stride, dense_block_stride = layer_kv_cache_strides(
-            spec, num_blocks, layout, dense_page * num_layers, block_size
-        )
-        layer_stride = dense_layer_stride if layer_stride is None else layer_stride
-        block_stride = dense_block_stride if block_stride is None else block_stride
-
-    order = layout.layer_view_order
-    physical_shape = tuple(shape_bytes[i] for i in order)
-    inv_order = [order.index(i) for i in range(4)]
-    # The page interior is dense in layout order; only the block stride can
-    # step over padding or over other layers' pages, which requires blocks to
-    # be the outermost dim of the layer's view.
+    # Everything inside the layer and block dims is dense in layout order (so
+    # e.g. BHLNC's head stride spans the layers it interleaves); the caller's
+    # strides place the layers and blocks themselves.
+    logical_shape = (num_layers, *shape_bytes)
+    stride_order = layout.stride_order
+    physical_shape = tuple(logical_shape[i] for i in stride_order)
+    inv_order = [stride_order.index(i) for i in range(5)]
     strides = list(torch.empty(physical_shape, device="meta").stride())
-    block_pos = order.index(_DIM_B - 1)
-    assert block_pos == 0 or block_stride == strides[block_pos], (
-        f"KV cache layout {layout.name} places heads outside blocks, which "
-        "cannot express a block stride that spans other layers' pages."
-    )
-    strides[block_pos] = block_stride
+    strides[inv_order[_DIM_L]] = layer_stride
+    strides[inv_order[_DIM_B]] = block_stride
     dtype = getattr(spec, "dtype", None)
 
+    cache = torch.as_strided(
+        raw,
+        size=physical_shape,
+        stride=tuple(strides),
+        storage_offset=raw.storage_offset() + offset,
+    )
+    cache_logical_5d = cache.permute(*inv_order)
+
     views = []
-    base_offset = raw.storage_offset() + offset
     for layer_idx in range(num_layers):
-        cache = torch.as_strided(
-            raw,
-            size=physical_shape,
-            stride=tuple(strides),
-            storage_offset=base_offset + layer_idx * layer_stride,
-        )
-        cache_logical = cache.permute(*inv_order)
+        cache_logical = cache_logical_5d[layer_idx]
         if dtype is not None:
             cache_logical = cache_logical.view(dtype)
         views.append(cache_logical)
@@ -408,6 +440,7 @@ class AttentionSpec(KVCacheSpec):
 
     @property
     def state_content_size_bytes(self) -> int:
+        """Bytes per (head slot, stored state) cell of the page."""
         if self.state_content_bytes is not None:
             return self.state_content_bytes
         return (self.head_size + self.head_size_v) * get_dtype_size(self.dtype)
@@ -548,7 +581,6 @@ class MLAAttentionSpec(FullAttentionSpec):
     cache_dtype_str: str | None = None
     # DeepseekV4 only fields. Non-DeepseekV4 MLA models leave these at defaults.
     alignment: int | None = None  # Default to None for no padding.
-    tokens_per_state: int = 1
     model_version: str | None = None
     # Marks draft groups that flatten a non-causal query block into decode rows.
     non_causal_multi_token_decode: bool = False
@@ -742,7 +774,6 @@ class SlidingWindowMLASpec(SlidingWindowSpec):
     cache_dtype_str: str | None = None
     # DeepseekV4-only: see MLAAttentionSpec.model_version.
     alignment: int | None = None  # Default to None for no padding.
-    tokens_per_state: int = 1
     model_version: str | None = None
 
     # MLA stores a single latent vector per state; there is no separate V.
@@ -1070,8 +1101,8 @@ class KVCacheTensor:
     allocation of ``size`` bytes. Layer-outermost layouts give each layer a
     contiguous region (``layer_stride = page * num_blocks``,
     ``block_stride = page``); block-outermost layouts make each block a
-    window of all layers' pages (``layer_stride = page``,
-    ``block_stride`` = the window). Tensors whose address ranges overlap
+    block of all layers' pages (``layer_stride = page``, ``block_stride`` =
+    the packed block). Tensors whose address ranges overlap
     alias the same bytes: cache groups overlay each other, which is sound
     because a block ID is owned by one group at a time.
     """

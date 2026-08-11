@@ -963,7 +963,7 @@ def _pool_bytes_per_block(kv_cache_groups: list[KVCacheGroupSpec]) -> int:
     `available_memory` into `num_blocks`. Used to compute the effective KV cache
     capacity once `num_gpu_blocks_override` is applied.
     """
-    return _pack_layers_densely(kv_cache_groups)[0] if kv_cache_groups else 0
+    return _get_packed_kv_cache_layout(kv_cache_groups)[0]
 
 
 def get_uniform_page_size(kv_cache_specs: Iterable[KVCacheSpec]) -> int:
@@ -1232,7 +1232,7 @@ def _get_per_layer_spec(
     return spec
 
 
-def _pack_layers_densely(
+def _get_packed_kv_cache_layout(
     kv_cache_groups: list[KVCacheGroupSpec],
 ) -> tuple[int, list[tuple[int, list[str], KVCacheSpec]]]:
     """Lay each group's layers out densely, one after another.
@@ -1240,15 +1240,14 @@ def _pack_layers_densely(
     Each group packs its layers with no holes starting from offset 0, so the
     groups overlay each other: a group's layers may reuse another group's
     bytes, which is sound because a block ID is owned by one cache group at
-    a time. Returns the per-block window size (the largest group's packing)
-    and, per run of consecutive same-spec layers, its byte offset within the
-    window.
+    a time. Returns the packed block stride (the largest group's packing) and,
+    per run of consecutive same-spec layers, its byte offset within a block.
 
     Runs are the unit of allocation: layers in a run share one spec, so they
     form a rectangular layer dimension.
     """
     runs: list[tuple[int, list[str], KVCacheSpec]] = []
-    window = 0
+    packed_block_stride = 0
     for group in kv_cache_groups:
         byte_offset = 0
         for layer_name in group.layer_names:
@@ -1263,9 +1262,9 @@ def _pack_layers_densely(
             else:
                 runs.append((byte_offset, [layer_name], spec))
             byte_offset += spec.page_size_bytes
-        window = max(window, byte_offset)
-    assert window > 0
-    return window, runs
+        packed_block_stride = max(packed_block_stride, byte_offset)
+    assert packed_block_stride > 0
+    return packed_block_stride, runs
 
 
 def _resolve_layout_for_groups(
@@ -1320,16 +1319,21 @@ def get_kv_cache_config_from_groups(
             kv_cache_groups=kv_cache_groups,
         )
 
-    window, runs = _pack_layers_densely(kv_cache_groups)
-    num_blocks = available_memory // window
+    packed_block_stride, runs = _get_packed_kv_cache_layout(kv_cache_groups)
+    num_blocks = available_memory // packed_block_stride
     num_blocks = may_override_num_blocks(vllm_config, num_blocks)
-    size = window * num_blocks
+    size = packed_block_stride * num_blocks
 
     layout = _resolve_layout_for_groups(kv_cache_groups, vllm_config.cache_config)
     kv_cache_tensors = []
+    dense = len(runs) == 1
     for byte_offset, layer_names, spec in runs:
         layer_stride, block_stride = layer_kv_cache_strides(
-            spec, num_blocks, layout, window
+            spec,
+            num_blocks,
+            len(layer_names),
+            layout,
+            packed_block_stride=None if dense else packed_block_stride,
         )
         kv_cache_tensors.append(
             KVCacheTensor(
@@ -1831,9 +1835,6 @@ def _max_memory_usage_bytes_from_groups(
         return 0
 
     bytes_per_block = _pool_bytes_per_block(kv_cache_groups)
-    if bytes_per_block == 0:
-        return 0
-
     total_blocks = 0
     for group in kv_cache_groups:
         spec = group.kv_cache_spec
@@ -2117,9 +2118,8 @@ def get_kv_cache_configs(
         # Re-plan with exactly the memory the smallest rank can afford, so
         # strides and offsets stay consistent with the shrunken allocation.
         groups = kv_cache_config.kv_cache_groups
-        window = _pack_layers_densely(groups)[0]
         kv_cache_configs[i] = get_kv_cache_config_from_groups(
-            vllm_config, groups, min_num_blocks * window
+            vllm_config, groups, min_num_blocks * _pool_bytes_per_block(groups)
         )
 
     return kv_cache_configs
