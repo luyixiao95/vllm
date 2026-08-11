@@ -58,7 +58,7 @@ from vllm.distributed.kv_transfer.kv_connector.v1.mooncake.store.protocol import
 from vllm.logger import init_logger
 from vllm.utils.math_utils import cdiv
 from vllm.utils.network_utils import get_ip, make_zmq_socket
-from vllm.v1.attention.backends.utils import NULL_BLOCK_ID, resolve_kv_cache_layout
+from vllm.v1.attention.backends.utils import NULL_BLOCK_ID, get_kv_cache_layout
 from vllm.v1.core.kv_cache_utils import (
     BlockHash,
     maybe_convert_block_hash,
@@ -1503,7 +1503,7 @@ class MooncakeStoreWorker:
         assert self.cache_config.num_gpu_blocks is not None
         self.num_blocks = self.cache_config.num_gpu_blocks
 
-        layout = resolve_kv_cache_layout()
+        layout = get_kv_cache_layout()
         seen_storage_ptrs: set[int] = set()
         seen_region_ptrs: set[int] = set()
         addrs: list[int] = []

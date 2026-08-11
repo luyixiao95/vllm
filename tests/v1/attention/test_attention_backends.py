@@ -34,7 +34,7 @@ from vllm.v1.attention.backends import utils as attn_utils
 from vllm.v1.attention.backends.registry import AttentionBackendEnum
 from vllm.v1.attention.backends.utils import (
     _layout_from_name,
-    resolve_kv_cache_layout,
+    get_kv_cache_layout,
     set_kv_cache_layout,
 )
 from vllm.v1.kv_cache_interface import FullAttentionSpec, KVCacheLayout
@@ -518,7 +518,7 @@ def _test_backend_correctness(
         is not None
     }
     assert len(required_layouts) <= 1, "conflicting required layouts under test"
-    layout = resolve_kv_cache_layout()
+    layout = get_kv_cache_layout()
     if required_layouts and attn_utils._KV_CACHE_LAYOUT_OVERRIDE is None:
         layout = _layout_from_name(required_layouts.pop())
     kv_cache = create_and_prepopulate_kv_cache(

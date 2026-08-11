@@ -14,7 +14,7 @@ from vllm.v1.attention.backend import (
     AttentionCGSupport,
     CommonAttentionMetadata,
 )
-from vllm.v1.attention.backends.utils import resolve_kv_cache_layout
+from vllm.v1.attention.backends.utils import get_kv_cache_layout
 from vllm.v1.kv_cache_interface import (
     AttentionSpec,
     KVCacheConfig,
@@ -176,7 +176,7 @@ def _allocate_and_reshape_kv_cache(
     return allocate_and_reshape_kv_cache(
         kv_cache_config,
         device,
-        layout if layout is not None else resolve_kv_cache_layout(),
+        layout if layout is not None else get_kv_cache_layout(),
         kernel_block_sizes,
     )
 

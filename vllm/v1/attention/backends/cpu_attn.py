@@ -24,7 +24,6 @@ from vllm.v1.attention.backend import (
     CommonAttentionMetadata,
     MultipleOf,
 )
-from vllm.v1.attention.backends.utils import resolve_kv_cache_layout
 from vllm.v1.kv_cache_interface import (
     AttentionSpec,
     CrossAttentionSpec,
@@ -33,31 +32,12 @@ from vllm.v1.kv_cache_interface import (
 
 logger = init_logger(__name__)
 
-_CPU_KV_CACHE_LAYOUTS = frozenset(("LBHNC", "BLHNC", "BHLNC"))
-
 
 def _split_cpu_kv_cache(
     kv_cache: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Split a logical CPU KV cache into contiguous-token K and V views."""
-    layout = resolve_kv_cache_layout()
-    if layout.name not in _CPU_KV_CACHE_LAYOUTS:
-        raise ValueError(
-            f"CPU attention does not support KV cache layout {layout.name}. "
-            f"Supported layouts: {sorted(_CPU_KV_CACHE_LAYOUTS)}."
-        )
-    if kv_cache.ndim != 4:
-        raise ValueError(f"CPU KV cache must be 4D, got {kv_cache.ndim}D")
-
     num_blocks, num_kv_heads, block_size, content_size = kv_cache.shape
-    if content_size % 2 != 0:
-        raise ValueError(f"CPU KV cache content size must be even, got {content_size}")
-    if kv_cache.stride(-1) != 1 or kv_cache.stride(-2) != content_size:
-        raise ValueError(
-            "CPU attention requires contiguous token and content dimensions; "
-            f"got shape {tuple(kv_cache.shape)} and strides {kv_cache.stride()}"
-        )
-
     kv_cache = kv_cache.view(
         num_blocks, num_kv_heads, block_size * 2, content_size // 2
     )

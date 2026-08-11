@@ -148,8 +148,8 @@ from vllm.v1.attention.backends.utils import (
     NULL_BLOCK_ID,
     create_fast_prefill_custom_backend,
     get_dcp_local_seq_lens,
+    get_kv_cache_layout,
     reorder_batch_to_split_decodes_and_prefills,
-    resolve_kv_cache_layout,
 )
 from vllm.v1.core.sched.output import NewRequestData
 from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
@@ -7415,7 +7415,7 @@ class GPUModelRunner(
             corresponding memory buffer for KV cache.
         """
 
-        layout = resolve_kv_cache_layout()
+        layout = get_kv_cache_layout()
         kv_caches = self._allocate_and_reshape_kv_cache(
             kv_cache_config, kernel_block_sizes, layout=layout
         )

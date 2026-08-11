@@ -50,7 +50,7 @@ from vllm.platforms import current_platform
 from vllm.utils.math_utils import cdiv
 from vllm.utils.network_utils import get_ip, make_zmq_path, make_zmq_socket
 from vllm.v1.attention.backend import AttentionMetadata
-from vllm.v1.attention.backends.utils import NULL_BLOCK_ID, resolve_kv_cache_layout
+from vllm.v1.attention.backends.utils import NULL_BLOCK_ID, get_kv_cache_layout
 from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.kv_cache_interface import (
     AttentionSpec,
@@ -1000,7 +1000,7 @@ class MooncakeConnectorWorker:
         self._sync_block_size_with_kernel()
 
         self.attn_backends = get_current_attn_backends(vllm_config)
-        self.kv_cache_layout = resolve_kv_cache_layout().name
+        self.kv_cache_layout = get_kv_cache_layout().name
         logger.debug(
             "Detected attention backends %s",
             [backend.get_name() for backend in self.attn_backends],
@@ -1632,7 +1632,7 @@ class MooncakeConnectorWorker:
 
         logger.info("Registering KV_Caches. use_mla: %s", self.use_mla)
 
-        layout = resolve_kv_cache_layout()
+        layout = get_kv_cache_layout()
         kv_data_ptrs: list[int] = []
         kv_data_lens: list[int] = []
         region_base_addresses: list[int] = []

@@ -19,7 +19,7 @@ NUM_LAYERS = [1]  # Arbitrary values for testing
 NUM_HEADS = [8]  # Arbitrary values for testing
 HEAD_SIZES = [64, 80, 256]
 BLOCK_SIZES = [8, 16, 32]
-CACHE_LAYOUTS = ["LBNHC", "LBHNC"]
+CACHE_LAYOUTS = ["NHD", "HND"]
 KV_SCALE_TYPES = ["tensor", "attn_head"]
 
 # Parameters for MLA tests.
@@ -196,8 +196,8 @@ def test_reshape_and_cache_flash(
     torch.set_default_device(device)
     torch.accelerator.set_device_index(device)
     assert implementation in ["cuda", "triton"]
-    if implementation == "triton" and kv_cache_layout == "LBHNC":
-        pytest.skip("Triton implementation only supports LBNHC layout.")
+    if implementation == "triton" and kv_cache_layout == "HND":
+        pytest.skip("Triton implementation only supports NHD layout.")
 
     if kv_scale_type == "attn_head" and implementation != "cuda":
         pytest.skip("Only CUDA implementation supports attn_head scaling.")
@@ -270,7 +270,7 @@ def test_reshape_and_cache_flash(
         v_scale = (value.amax(dim=(0, 2)) / 64.0).to(torch.float32)
 
     def permute_and_compact(x):
-        y = x if kv_cache_layout == "LBNHC" else x.permute(0, 2, 1, 3)
+        y = x if kv_cache_layout == "NHD" else x.permute(0, 2, 1, 3)
         return y.contiguous()
 
     if kv_cache_dtype != "nvfp4":
@@ -284,8 +284,8 @@ def test_reshape_and_cache_flash(
                 fp8_input.flatten(0, 2), scale, group_shape=None, out_dtype=output.dtype
             ).reshape(*input.shape)
         else:  # per-head: broadcast scale along the head dimension
-            # Original code uses dim 2 for LBNHC, dim 1 for LBHNC
-            if kv_cache_layout == "LBNHC":
+            # Original code uses dim 2 for NHD, dim 1 for HND
+            if kv_cache_layout == "NHD":
                 result = fp8_input.to(output.dtype) * scale.view(1, 1, -1, 1)
             else:
                 result = fp8_input.to(output.dtype) * scale.view(1, -1, 1, 1)
@@ -407,7 +407,7 @@ def test_reshape_and_cache_flash(
     for i in range(num_tokens):
         block_idx = block_indices_lst[i]
         block_offset = block_offsets_lst[i]
-        if kv_cache_layout == "LBNHC":
+        if kv_cache_layout == "NHD":
             cloned_key_cache[block_idx, block_offset, :, :] = key[i]
             cloned_value_cache[block_idx, block_offset, :, :] = value[i]
         else:

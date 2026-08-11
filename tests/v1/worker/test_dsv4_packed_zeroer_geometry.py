@@ -102,7 +102,7 @@ def test_overlaid_zeroer_dedups_segments_with_max_span():
     allocated block is fully zeroed no matter which group owns it."""
     from unittest.mock import MagicMock
 
-    from vllm.v1.attention.backends.utils import resolve_kv_cache_layout
+    from vllm.v1.attention.backends.utils import get_kv_cache_layout
     from vllm.v1.core.kv_cache_utils import get_kv_cache_config_from_groups
     from vllm.v1.kv_cache_interface import (
         KVCacheGroupSpec,
@@ -132,7 +132,7 @@ def test_overlaid_zeroer_dedups_segments_with_max_span():
     vllm_config.cache_config.kv_cache_layout = None
     config = get_kv_cache_config_from_groups(vllm_config, groups, 8 * 1024 * 1024)
     views = allocate_and_reshape_kv_cache(
-        config, torch.device("cpu"), resolve_kv_cache_layout(), None
+        config, torch.device("cpu"), get_kv_cache_layout(), None
     )
     buf_ptr = views["g1.big"].data_ptr()
 

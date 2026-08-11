@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Attention layer with PagedAttention and Triton prefix prefill."""
 
-from dataclasses import replace
 from typing import ClassVar
 
 import torch
@@ -15,7 +14,7 @@ from vllm.model_executor.layers.quantization.utils.quant_utils import (
     QuantKey,
     kFp8StaticTensorSym,
 )
-from vllm.utils.torch_utils import get_dtype_size, is_quantized_kv_cache
+from vllm.utils.torch_utils import is_quantized_kv_cache
 from vllm.v1.attention.backend import AttentionLayer, AttentionType, MultipleOf
 from vllm.v1.attention.backends.rocm_aiter_fa import _use_separate_kv_head_groups
 from vllm.v1.attention.backends.rocm_attn import (
@@ -33,21 +32,12 @@ logger = init_logger(__name__)
 class RocmAiterUnifiedAttentionBackend(RocmAttentionBackend):
     @classmethod
     def customize_spec(cls, spec: AttentionSpec) -> AttentionSpec:
-        """K and V as two head groups ``[B, 2, N, H*hs]`` so each side is one
-        contiguous token-major region per block, as the AITER fused
-        QK-norm+RoPE+cache kernel addresses them."""
-        if spec.state_content_bytes is not None or not _use_separate_kv_head_groups():
+        """Separate K/V head groups, as the AITER fused QK-norm+RoPE+cache
+        kernel addresses them; the shuffle-layout variant keeps the packed
+        content dim."""
+        if not _use_separate_kv_head_groups():
             return spec
-        assert spec.head_size == spec.head_size_v, (
-            "Separate K/V head groups require symmetric K/V head sizes."
-        )
-        return replace(
-            spec,
-            num_head_slots=2,
-            state_content_bytes=spec.num_kv_heads
-            * spec.head_size
-            * get_dtype_size(spec.dtype),
-        )
+        return super().customize_spec(spec)
 
     @classmethod
     def get_required_kv_cache_layout(cls) -> KVCacheLayoutType | None:

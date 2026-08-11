@@ -15,7 +15,7 @@ import pytest
 import torch
 
 from vllm.v1.attention.backends.utils import (
-    resolve_kv_cache_layout,
+    get_kv_cache_layout,
     set_kv_cache_layout,
 )
 from vllm.v1.core.kv_cache_utils import (
@@ -91,7 +91,7 @@ def _packed_block_stride(groups) -> int:
 
 def _bind(config):
     return allocate_and_reshape_kv_cache(
-        config, torch.device("cpu"), resolve_kv_cache_layout(), None
+        config, torch.device("cpu"), get_kv_cache_layout(), None
     )
 
 
@@ -199,7 +199,7 @@ class TestDensePacking:
         groups, _, _ = _mixed_page_groups()
         vllm_config = _mock_vllm_config()
         get_kv_cache_config_from_groups(vllm_config, groups, MEMORY)
-        assert not resolve_kv_cache_layout().is_layer_compact
+        assert not get_kv_cache_layout().is_layer_compact
         assert vllm_config.cache_config.kv_cache_layout == "BLHNC"
 
     def test_explicit_layer_outer_layout_rejected_for_overlays(self):

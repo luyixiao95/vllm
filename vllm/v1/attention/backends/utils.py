@@ -164,7 +164,7 @@ _FLASHINFER_LAYOUT_NAMES = {
 
 def get_flashinfer_layout_string() -> str:
     """Return the layout name in FlashInfer's convention (NHD/HND)."""
-    name = resolve_kv_cache_layout().name
+    name = get_kv_cache_layout().name
     assert name in _FLASHINFER_LAYOUT_NAMES, (
         f"KV cache layout {name} has no FlashInfer equivalent; FlashInfer "
         "rejects it in supports_kv_cache_layout"
@@ -271,7 +271,7 @@ def require_block_outer_kv_cache_layout(cache_config=None) -> KVCacheLayout:
     honored and raises.
     """
     global _RESOLVED_KV_CACHE_LAYOUT
-    layout = resolve_kv_cache_layout()
+    layout = get_kv_cache_layout()
     if not layout.is_layer_compact:
         return layout
 
@@ -290,7 +290,7 @@ def require_block_outer_kv_cache_layout(cache_config=None) -> KVCacheLayout:
     return layout
 
 
-def resolve_kv_cache_layout() -> KVCacheLayout:
+def get_kv_cache_layout() -> KVCacheLayout:
     """Return the resolved physical KV cache layout.
 
     Read-only: prefers the test override, then the value published by

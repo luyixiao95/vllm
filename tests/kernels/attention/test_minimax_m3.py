@@ -19,7 +19,7 @@ from vllm.models.minimax_m3.common.ops.sparse_attn import (
 from vllm.models.minimax_m3.common.sparse_attention import MiniMaxM3SparseTritonImpl
 from vllm.platforms import current_platform
 from vllm.v1.attention.backends.utils import (
-    resolve_kv_cache_layout,
+    get_kv_cache_layout,
     set_kv_cache_layout,
 )
 from vllm.v1.kv_cache_interface import (
@@ -52,7 +52,7 @@ def _layer_stride_order(ndim: int) -> tuple[int, ...]:
     indexer side cache (H=1) is contiguous, so identity."""
     if ndim == 3:
         return (0, 1, 2)
-    stride_order = resolve_kv_cache_layout().layer_view_order
+    stride_order = get_kv_cache_layout().layer_view_order
     assert len(stride_order) == ndim
     return stride_order
 
@@ -935,16 +935,16 @@ def test_main_cache_layout_contract():
 
     try:
         set_kv_cache_layout("HND")
-        assert resolve_kv_cache_layout() is KVCacheLayout.LBHNC
+        assert get_kv_cache_layout() is KVCacheLayout.LBHNC
         set_kv_cache_layout("NHD")
-        assert resolve_kv_cache_layout() is KVCacheLayout.LBNHC
+        assert get_kv_cache_layout() is KVCacheLayout.LBNHC
     finally:
         set_kv_cache_layout(None)
 
     for layout in ("NHD", "HND"):
         try:
             set_kv_cache_layout(layout)
-            order = resolve_kv_cache_layout().layer_view_order
+            order = get_kv_cache_layout().layer_view_order
         finally:
             set_kv_cache_layout(None)
         # Valid permutation: no duplicates, covers every axis.
@@ -956,7 +956,7 @@ def test_unknown_layout_raises():
     try:
         set_kv_cache_layout("BOGUS")
         with pytest.raises(ValueError, match="Unknown KV cache layout"):
-            resolve_kv_cache_layout()
+            get_kv_cache_layout()
     finally:
         set_kv_cache_layout(None)
 
@@ -990,7 +990,7 @@ def test_hnd_allocation_is_packed_head_major():
     logical = _main_kv_logical_shape(nb)
     try:
         set_kv_cache_layout("HND")
-        stride_order = resolve_kv_cache_layout().layer_view_order
+        stride_order = get_kv_cache_layout().layer_view_order
     finally:
         set_kv_cache_layout(None)
 
@@ -1026,7 +1026,7 @@ def test_main_cache_is_block_first_and_unpadded():
     for layout in ("NHD", "HND"):
         try:
             set_kv_cache_layout(layout)
-            order = resolve_kv_cache_layout().layer_view_order
+            order = get_kv_cache_layout().layer_view_order
         finally:
             set_kv_cache_layout(None)
         inv_order = [order.index(i) for i in range(len(order))]
@@ -1339,7 +1339,7 @@ def test_main_cache_byte_identical_through_production_allocator():
     raw = torch.zeros(nb * spec.page_size_bytes, dtype=torch.int8)
     try:
         set_kv_cache_layout("HND")
-        layout = resolve_kv_cache_layout()
+        layout = get_kv_cache_layout()
     finally:
         set_kv_cache_layout(None)
     view = reshape_kv_cache(raw, spec, nb, 1, layout, BLOCK_SIZE)[0]
@@ -1365,7 +1365,7 @@ def test_padded_main_cache_is_flagged():
 
     try:
         set_kv_cache_layout("HND")
-        stride_order = resolve_kv_cache_layout().layer_view_order
+        stride_order = get_kv_cache_layout().layer_view_order
     finally:
         set_kv_cache_layout(None)
 

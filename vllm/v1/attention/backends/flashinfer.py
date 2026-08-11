@@ -66,10 +66,10 @@ from vllm.v1.attention.backend import (
 from vllm.v1.attention.backends.utils import (
     get_dcp_local_seq_lens,
     get_flashinfer_layout_string,
+    get_kv_cache_layout,
     get_num_attention_heads_from_layers,
     get_per_layer_parameters,
     infer_global_hyperparameters,
-    resolve_kv_cache_layout,
     split_decodes_and_prefills,
 )
 from vllm.v1.attention.ops.common import cp_lse_ag_out_rs
@@ -1773,7 +1773,7 @@ class FlashInferImpl(AttentionImpl):
         output = output[:num_actual_tokens]
 
         # Permute to FlashInfer's expected layout (metadata-only).
-        stride_order = resolve_kv_cache_layout().layer_view_order
+        stride_order = get_kv_cache_layout().layer_view_order
         kv_cache_permute = kv_cache.permute(*stride_order)
         # Fix degenerate strides on any size-1 dimension (e.g. num_kv_heads=1
         # with TP=8).  PyTorch permits non-canonical strides on size-1 dims;
