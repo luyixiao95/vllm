@@ -23,42 +23,6 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 
 
-def _kv_cache_block_regions(
-    kv_caches: dict[str, torch.Tensor],
-    num_blocks: int,
-) -> dict[str, torch.Tensor]:
-    """Split each unique KV allocation into ``[num_blocks, block_bytes]`` tiles.
-
-    The DMA backend copies whole blocks by address arithmetic
-    (``base + block_id * stride(0)``), so every region must hold one scheduler
-    block's bytes contiguously. ``reshape_kv_cache`` lays each allocation out
-    as a dense stack of such tiles: dimensions physically outside B (layers in
-    a layer-compact layout, head groups under LHBNC) only select a tile, and
-    virtual block splitting widens ``block_bytes``.
-    """
-    regions: dict[str, torch.Tensor] = {}
-    seen: set[tuple[torch.device, int]] = set()
-    for name, tensor in kv_caches.items():
-        storage = tensor.untyped_storage()
-        key = (tensor.device, storage.data_ptr())
-        if key in seen:
-            continue
-        seen.add(key)
-
-        physical_per_block, remainder = divmod(tensor.shape[0], num_blocks)
-        assert remainder == 0, (
-            f"KV cache {name!r} has {tensor.shape[0]} physical blocks, which "
-            f"is not divisible by {num_blocks} scheduler blocks"
-        )
-        block_bytes = tensor.stride(0) * tensor.element_size() * physical_per_block
-        raw = torch.empty(0, dtype=torch.uint8, device=tensor.device).set_(storage)
-        tiles = raw.view(-1, num_blocks, block_bytes)
-        for tile_idx, tile in enumerate(tiles):
-            regions[name if len(tiles) == 1 else f"{name}.{tile_idx}"] = tile
-
-    return regions
-
-
 class SimpleCPUOffloadWorker:
     """Worker-side handler for CPU offloading transfers."""
 
@@ -134,7 +98,28 @@ class SimpleCPUOffloadWorker:
         assert self.kv_cache_config is not None
         num_blocks = self.kv_cache_config.num_blocks
 
-        unique_gpu_caches = _kv_cache_block_regions(kv_caches, num_blocks)
+        # The DMA backend copies whole blocks as base + block_id * stride(0),
+        # so view each unique allocation as [num_blocks, block_bytes].
+        unique_gpu_caches: dict[str, torch.Tensor] = {}
+        seen: set[tuple[torch.device, int]] = set()
+        for name, tensor in kv_caches.items():
+            storage = tensor.untyped_storage()
+            key = (tensor.device, storage.data_ptr())
+            if key in seen:
+                continue
+            seen.add(key)
+
+            physical_per_block, remainder = divmod(tensor.shape[0], num_blocks)
+            assert remainder == 0, (
+                f"KV cache {name!r} has {tensor.shape[0]} physical blocks, which "
+                f"is not divisible by {num_blocks} scheduler blocks"
+            )
+            block_bytes = tensor.stride(0) * tensor.element_size() * physical_per_block
+            raw = torch.empty(0, dtype=torch.int8, device=tensor.device).set_(storage)
+            regions = raw.view(-1, num_blocks, block_bytes)
+            for idx, region in enumerate(regions):
+                key_name = name if len(regions) == 1 else f"{name}.{idx}"
+                unique_gpu_caches[key_name] = region
 
         # Compute per-tensor bytes_per_block. Tensors may have different
         # page_size_bytes (e.g., UniformTypeKVCacheSpecs with varying head_size).

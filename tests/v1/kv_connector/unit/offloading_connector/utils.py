@@ -241,15 +241,14 @@ class RequestRunner:
                 )
             ]
 
-        # Groups overlay one allocation sized by the largest group's dense
-        # packing; each group's layers are one run of that allocation.
-        window = max(
+        # Groups overlay one allocation, sized by the largest group.
+        block_stride = max(
             group.kv_cache_spec.page_size_bytes * len(group.layer_names)
             for group in kv_cache_groups
         )
         kv_cache_tensors = [
             KVCacheTensor(
-                size=window * num_gpu_blocks,
+                size=block_stride * num_gpu_blocks,
                 layers=list(group.layer_names),
                 layer_stride=group.kv_cache_spec.page_size_bytes * num_gpu_blocks,
                 block_stride=group.kv_cache_spec.page_size_bytes,
