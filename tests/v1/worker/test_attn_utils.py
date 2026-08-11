@@ -23,8 +23,10 @@ from vllm.v1.kv_cache_interface import (
     MLAAttentionSpec,
     reshape_kv_cache,
 )
-from vllm.v1.worker.gpu.attn_utils import _allocate_and_reshape_kv_cache
-from vllm.v1.worker.utils import copy_kv_cache_blocks_inplace
+from vllm.v1.worker.utils import (
+    allocate_and_reshape_kv_cache,
+    copy_kv_cache_blocks_inplace,
+)
 
 
 def test_reshape_padded_kv_cache_strides_by_padded_page():
@@ -185,11 +187,8 @@ def test_allocate_compressed_mla_cache(
         kv_cache_groups=[KVCacheGroupSpec(["layer.0"], spec)],
     )
 
-    caches = _allocate_and_reshape_kv_cache(
-        config,
-        torch.device("cpu"),
-        layout=KVCacheLayout.LBHNC,
-        kernel_block_sizes=kernel_block_sizes,
+    caches = allocate_and_reshape_kv_cache(
+        config, torch.device("cpu"), KVCacheLayout.LBHNC, kernel_block_sizes
     )
 
     assert caches["layer.0"].shape == (

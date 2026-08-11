@@ -266,13 +266,6 @@ class KVCacheLayout(Enum):
         return self.value.index(_DIM_H) < self.value.index(_DIM_B)
 
 
-def num_states_for(block_size: int, tokens_per_state: int) -> int:
-    """Derive num_states at allocation time (not part of the spec)."""
-    if tokens_per_state == -1:
-        return 1  # recurrent: single state per block
-    return block_size // tokens_per_state
-
-
 def compute_layer_kv_cache_shape_bytes(
     spec: KVCacheSpec,
     num_blocks: int,
@@ -280,8 +273,8 @@ def compute_layer_kv_cache_shape_bytes(
 ) -> tuple[int, ...]:
     """Return the 4D logical shape ``(B, H, N, C)`` where C is in bytes."""
     bs = block_size if block_size is not None else spec.block_size
-    ns = num_states_for(bs, spec.tokens_per_state)
-    return (num_blocks, spec.num_heads, ns, spec.state_content_size_bytes)
+    num_states = spec.storage_block_size * bs // spec.block_size
+    return (num_blocks, spec.num_heads, num_states, spec.state_content_size_bytes)
 
 
 def layer_kv_cache_strides(
@@ -435,10 +428,6 @@ class AttentionSpec(KVCacheSpec):
         return self.num_kv_heads
 
     @property
-    def num_states(self) -> int:
-        return num_states_for(self.block_size, self.tokens_per_state)
-
-    @property
     def state_content_size_bytes(self) -> int:
         """Bytes per (head slot, stored state) cell of the page."""
         if self.state_content_bytes is not None:
@@ -447,7 +436,7 @@ class AttentionSpec(KVCacheSpec):
 
     @property
     def unpadded_page_size_bytes(self) -> int:
-        return self.num_heads * self.num_states * self.state_content_size_bytes
+        return self.num_heads * self.storage_block_size * self.state_content_size_bytes
 
     @property
     def page_size_bytes(self) -> int:
@@ -844,6 +833,10 @@ class MambaSpec(KVCacheSpec):
     tokens_per_state: int = -1
 
     @property
+    def storage_block_size(self) -> int:
+        return 1  # recurrent: a single state per block
+
+    @property
     def state_content_size_bytes(self) -> int:
         return sum(
             prod(shape) * get_dtype_size(dtype)
@@ -1033,9 +1026,6 @@ class UniformTypeKVCacheSpecs(KVCacheSpec):
             return None
 
     # NOTE: below util functions are only used by DeepseekV4 for now.
-    def get_page_sizes(self) -> list[int]:
-        return list(set(spec.page_size_bytes for spec in self.kv_cache_specs.values()))
-
     def get_num_layer_tuples(self) -> int:
         return Counter(
             spec.page_size_bytes for spec in self.kv_cache_specs.values()

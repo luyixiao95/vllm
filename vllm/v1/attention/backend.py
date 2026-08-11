@@ -94,18 +94,6 @@ class AttentionBackend(ABC):
         return (cls.__module__, cls.__qualname__)
 
     @classmethod
-    def get_required_kv_cache_layout(cls) -> str | None:
-        return None
-
-    @classmethod
-    def supports_kv_cache_layout(cls, layout: "KVCacheLayout") -> bool:
-        """Whether this backend's kernels can consume caches allocated with
-        ``layout``. Generic attention kernels address a block as a single
-        strided [H, N, C] region, so layouts that hoist the head dim outside
-        the block dim (e.g. LHBNC) need explicit backend support."""
-        return not layout.heads_outside_blocks
-
-    @classmethod
     def get_supported_head_sizes(cls) -> list[int]:
         return []
 
@@ -146,17 +134,6 @@ class AttentionBackend(ABC):
         return False
 
     @classmethod
-    def get_preferred_block_size(cls, default_block_size: int) -> int:
-        supported_sizes = cls.get_supported_kernel_block_sizes()
-        if not supported_sizes:
-            return default_block_size
-
-        if cls.supports_block_size(default_block_size):
-            return default_block_size
-
-        return min(s.base if isinstance(s, MultipleOf) else s for s in supported_sizes)
-
-    @classmethod
     def customize_spec(cls, spec: "AttentionSpec") -> "AttentionSpec":
         """Adjust the layer's KV cache spec for this backend's kernels. Used when the
         kernels want KV packed in a specfic way.
@@ -169,6 +146,17 @@ class AttentionBackend(ABC):
         (see: https://github.com/vllm-project/vllm/issues/42449)
         """
         return spec
+
+    @classmethod
+    def get_preferred_block_size(cls, default_block_size: int) -> int:
+        supported_sizes = cls.get_supported_kernel_block_sizes()
+        if not supported_sizes:
+            return default_block_size
+
+        if cls.supports_block_size(default_block_size):
+            return default_block_size
+
+        return min(s.base if isinstance(s, MultipleOf) else s for s in supported_sizes)
 
     @classmethod
     def is_mla(cls) -> bool:
@@ -327,6 +315,18 @@ class AttentionBackend(ABC):
         if combination_reason is not None:
             invalid_reasons.append(combination_reason)
         return invalid_reasons
+
+    @classmethod
+    def get_required_kv_cache_layout(cls) -> str | None:
+        return None
+
+    @classmethod
+    def supports_kv_cache_layout(cls, layout: "KVCacheLayout") -> bool:
+        """Whether this backend's kernels can consume caches allocated with
+        ``layout``. Generic attention kernels address a block as a single
+        strided [H, N, C] region, so layouts that hoist the head dim outside
+        the block dim (e.g. LHBNC) need explicit backend support."""
+        return not layout.heads_outside_blocks
 
     @classmethod
     def is_ssm(cls) -> bool:

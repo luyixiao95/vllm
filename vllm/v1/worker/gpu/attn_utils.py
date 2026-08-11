@@ -18,7 +18,6 @@ from vllm.v1.attention.backends.utils import get_kv_cache_layout
 from vllm.v1.kv_cache_interface import (
     AttentionSpec,
     KVCacheConfig,
-    KVCacheLayout,
     KVCacheSpec,
     UniformTypeKVCacheSpecs,
 )
@@ -167,48 +166,28 @@ def init_attn_backend(
     return attn_groups, attn_cg_support_info, kernel_block_sizes
 
 
-def _allocate_and_reshape_kv_cache(
-    kv_cache_config: KVCacheConfig,
-    device: torch.device,
-    layout: KVCacheLayout | None = None,
-    kernel_block_sizes: list[int] | None = None,
-) -> dict[str, Any]:
-    return allocate_and_reshape_kv_cache(
-        kv_cache_config,
-        device,
-        layout if layout is not None else get_kv_cache_layout(),
-        kernel_block_sizes,
-    )
-
-
 def init_kv_cache(
     runner_kv_caches: list[torch.Tensor | list[torch.Tensor]],
     forward_context: dict[str, Any],
     kv_cache_config: KVCacheConfig,
-    attn_groups: list[list[AttentionGroup]],
     device: torch.device,
-    kernel_block_sizes: list[int] | None = None,
-    vllm_config: VllmConfig | None = None,
+    kernel_block_sizes: list[int],
+    vllm_config: VllmConfig,
 ) -> dict[str, Any]:
-    kv_caches = _allocate_and_reshape_kv_cache(
-        kv_cache_config,
-        device,
-        kernel_block_sizes=kernel_block_sizes,
+    kv_caches = allocate_and_reshape_kv_cache(
+        kv_cache_config, device, get_kv_cache_layout(), kernel_block_sizes
     )
-
-    num_attn_module = 1
-    if vllm_config is not None:
-        # Map any KV-sharing layers to their target layer's KV cache.
-        for layer_name, target in get_shared_kv_cache_layers(vllm_config).items():
-            kv_caches[layer_name] = kv_caches[target]
-        # Dual-attention models (e.g. LongCat-Flash) put two Attention modules
-        # per decoder layer, so a layer name carries two integers (layer +
-        # module index).
-        if vllm_config.model_config.hf_config.model_type in (
-            "longcat_flash",
-            "longcat_flash_ngram",
-        ):
-            num_attn_module = 2
+    # Map any KV-sharing layers to their target layer's KV cache.
+    for layer_name, target in get_shared_kv_cache_layers(vllm_config).items():
+        kv_caches[layer_name] = kv_caches[target]
+    # Dual-attention models (e.g. LongCat-Flash) put two Attention modules per
+    # decoder layer, so a layer name carries two integers (layer + module index).
+    num_attn_module = (
+        2
+        if vllm_config.model_config.hf_config.model_type
+        in ("longcat_flash", "longcat_flash_ngram")
+        else 1
+    )
     bind_kv_cache(kv_caches, forward_context, runner_kv_caches, num_attn_module)
     return kv_caches
 
